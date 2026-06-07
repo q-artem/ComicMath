@@ -76,19 +76,32 @@ medy = sorted(cyg)[len(cyg)//2] or 1
 rows = [[strokes[0]]]
 for s, g in zip(strokes[1:], cyg):
     (rows.append([s]) if g > max(8*medy, 50) else rows[-1].append(s))
-# letters within a row: split by WHITESPACE gap (> fraction of the row's letter height)
+# letters within a row.  ROW_COUNTS="13,13" -> split each row into exactly that
+# many letters at its N-1 LARGEST horizontal gaps (robust for double-struck
+# letters whose internal stroke gaps confuse a fixed threshold).  Otherwise fall
+# back to the whitespace-threshold method (SPLIT_FRAC).
+_rowc = os.environ.get("ROW_COUNTS")
+row_counts = [int(x) for x in _rowc.split(",")] if _rowc else None
 letters = []; per_row = []
-for row in rows:
+for ri, row in enumerate(rows):
     row.sort(key=lambda s: s['cx'])
     row_h = max(s['b'][3] for s in row) - min(s['b'][1] for s in row)
-    cur = [row[0]]; right = row[0]['b'][2]; n0 = len(letters)
-    _frac = float(os.environ.get("SPLIT_FRAC", "0.16"))
-    for s in row[1:]:
-        if s['b'][0] - right > _frac*row_h:
+    # cumulative right edge -> gap before each stroke (index i in row)
+    gaps = []; right = row[0]['b'][2]
+    for i, s in enumerate(row[1:], 1):
+        gaps.append((s['b'][0] - right, i)); right = max(right, s['b'][2])
+    if row_counts:
+        k = row_counts[ri]
+        cuts = set(i for _, i in sorted(gaps, reverse=True)[:k-1])   # k-1 biggest gaps
+    else:
+        _frac = float(os.environ.get("SPLIT_FRAC", "0.16"))
+        cuts = set(i for g, i in gaps if g > _frac*row_h)
+    cur = [row[0]]; n0 = len(letters)
+    for i, s in enumerate(row[1:], 1):
+        if i in cuts:
             letters.append(cur); cur = [s]
         else:
             cur.append(s)
-        right = max(right, s['b'][2])
     letters.append(cur); per_row.append(len(letters) - n0)
 print(f"{len(rows)} rows, {len(letters)} letters; expected {len(LETTERS)}; per row {per_row}")
 if len(letters) != len(LETTERS):

@@ -241,6 +241,15 @@ if DIGIT_WEIGHT:
         if g:
             reweight_glyph(g, DIGIT_WEIGHT)
 
+# digit "1" is narrow but inherits Fira's tabular advance (560) -> big right gap
+# (rsb ~186). Trim its advance to make it proportional so it doesn't trail space.
+_g1 = fira_cmap.get(0x31)
+if _g1 and _g1 in charstrs:
+    _bp = BoundsPen(None); charstrs[_g1].draw(_bp)
+    if _bp.bounds:
+        _x0, _, _x1, _ = _bp.bounds
+        hmtx[_g1] = (int(round(_x1 + max(_x0, 60))), hmtx[_g1][1])   # rsb ≈ lsb
+
 # --- Symbols (operators, relations, big operators) from Comic Relief ----------
 CR_STROKE   = 75.2 * gk["head"].unitsPerEm / 1000   # donor stroke in donor units (~154)
 STROKE_MAX  = 96                                     # target symbol stroke (20% thinner)
@@ -280,10 +289,10 @@ def graft_symbol(gname, donor_cp, stroke_cap=False, size_cap=None):
     return True
 
 # single-glyph operators / relations (skipped silently if donor lacks the cp)
-SIMPLE = [0x2202, 0x221E, 0x00B1, 0x00D7, 0x00F7, 0x2212, 0x002B,
-          0x2260, 0x2248, 0x2192, 0x21D2, 0x2208,
-          0x2219, 0x003C, 0x003E, 0x00AC, 0x2113, 0x2026]  # bullet < > neg ell ldots
-          # =, <=, >=, prime are synthesised below (rounded/Russian-style/larger)
+SIMPLE = [0x2202, 0x221E, 0x00B1, 0x00D7, 0x00F7, 0x2212, 0x002B, 0x0021,
+          0x2248, 0x2192, 0x21D2, 0x2208,
+          0x2219, 0x003C, 0x003E, 0x00AC, 0x2113, 0x2026]  # bullet < > neg ell ldots !
+          # =, !=, <=, >=, prime are synthesised below (rounded/Russian-style/larger)
 # big operators: each maps to its inline + .display variant glyph names
 BIG = {0x2211: ["uni2211", "uni2211.display"],
        0x220F: ["uni220F", "uni220F.display"],
@@ -371,11 +380,11 @@ def draw_comic_radical(gname, w):
     H  = y1 - y0
     top = y1 - w/2                                  # arm centreline (top edge at y1)
     # control points: small rounded foot -> bottom -> rise -> peak -> arm -> flat end
-    ctrl = [(x0 + 0.16*Wd, y0 + 0.26*H),           # flag tip (short, rounded foot)
-            (x0 + 0.33*Wd, y0 + 0.05*H + 0.3*w),   # rounded bottom
-            (x0 + 0.62*Wd, top - 0.05*H),          # lower rise (steeper, peak later)
-            (x0 + 0.76*Wd, top),                   # peak near advance -> short arm
-            (x0 + 0.88*Wd, top),                   # short arm (horizontal tangent)
+    ctrl = [(x0 + 0.18*Wd, y0 + 0.26*H),           # flag tip (short, rounded foot)
+            (x0 + 0.37*Wd, y0 + 0.05*H + 0.3*w),   # rounded bottom
+            (x0 + 0.70*Wd, top - 0.05*H),          # lower rise (steeper, peak later)
+            (x0 + 0.85*Wd, top),                   # peak near advance -> short arm
+            (x0 + 0.93*Wd, top),                   # short arm (horizontal tangent)
             (W, top)]                              # arm end -> flat butt at vinculum
     center = _catmull(ctrl, n=14)                   # smooth dense centreline
     center = [(x, min(y, top)) for x, y in center]  # clamp out spline overshoot above arm
@@ -419,6 +428,10 @@ for cp in SIMPLE:
     g = fira_cmap.get(cp)
     if g and graft_symbol(g, cp):                                 # small ops: uniform
         sym_done += 1
+# ∂ (partial) comes in a hair lighter than the letters -> nudge to common weight
+_gpar = fira_cmap.get(0x2202)
+if _gpar:
+    reweight_glyph(_gpar, 7)
 for cp, names in BIG.items():
     for g in names:
         if graft_symbol(g, cp, stroke_cap=True, size_cap=SIZE_CAP):  # thin + sized
@@ -444,13 +457,59 @@ def vert_variants(gname):
     con = _vv.get(gname)
     return [r.VariantGlyph for r in con.MathGlyphVariantRecord] if con else [gname]
 
-for cp in [0x28, 0x29, 0x5B, 0x5D, 0x7C]:             # { } drawn procedurally below
+def graft_bracket(cp):
+    """Grow the donor bracket across its whole size family at a CONSTANT x-scale
+    (taken from the base = natural Comic Sans proportions). Base looks like the
+    real donor bracket; tall variants only stretch vertically -> stroke weight
+    stays identical at every size (no thickening on multi-line)."""
     g0 = fira_cmap.get(cp)
-    if not g0:
-        continue
-    for g in vert_variants(g0):
-        if graft_symbol(g, cp, stroke_cap=True):     # constant stroke, stretch to height
-            sym_done += 1
+    if g0 is None:
+        return 0
+    src = gk_cmap.get(cp)
+    if src is None:
+        return 0
+    rec = DecomposingRecordingPen(gk_gs); gk_gs[src].draw(rec)
+    db = BoundsPen(gk_gs); rec.replay(db)
+    if not db.bounds:
+        return 0
+    dxmin, dymin, dxmax, dymax = db.bounds
+    dh = dymax - dymin
+    if dh <= 0:
+        return 0
+    variants = vert_variants(g0)
+    ob0 = BoundsPen(fira_gs); fira_gs[variants[0]].draw(ob0)
+    if not ob0.bounds:
+        return 0
+    sx = (ob0.bounds[3] - ob0.bounds[1]) / dh        # base natural (uniform) x-scale, held
+    n = 0
+    for vg in variants:
+        ob = BoundsPen(fira_gs); fira_gs[vg].draw(ob)
+        if not ob.bounds:
+            continue
+        oxmin, oymin, oxmax, oymax = ob.bounds
+        sy = (oymax - oymin) / dh                     # stretch to this size's height
+        tx = (oxmin + oxmax)/2 - sx*(dxmin + dxmax)/2
+        ty = (oymin + oymax)/2 - sy*(dymin + dymax)/2
+        t2 = T2CharStringPen(hmtx[vg][0], gk_gs)
+        rec.replay(TransformPen(Qu2CuPen(t2, max_err=0.6, reverse_direction=True),
+                                (sx, 0, 0, sy, tx, ty)))
+        charstrs[vg] = t2.getCharString(private=private)
+        n += 1
+    return n
+
+for cp in [0x7C]:                                    # | straight bar: vertical stretch is fine
+    sym_done += graft_bracket(cp)
+for cp in [0x28, 0x29, 0x5B, 0x5D, 0x7B, 0x7D]:      # base = natural donor; tall variants
+    g0 = fira_cmap.get(cp)                           # drawn procedurally below (no distortion)
+    if g0 and graft_symbol(g0, cp):
+        sym_done += 1
+_brk_w = {}                                          # natural base widths for the variants
+for cp in [0x28, 0x29, 0x5B, 0x5D, 0x7B, 0x7D]:
+    g0 = fira_cmap.get(cp)
+    if g0 and g0 in charstrs:
+        bp = BoundsPen(None); charstrs[g0].draw(bp)
+        if bp.bounds:
+            _brk_w[cp] = bp.bounds[2] - bp.bounds[0]
 
 # ============================================================================
 # synthesised symbols (Comic Relief lacks them) — drawn in the target glyph's
@@ -649,17 +708,45 @@ def r_ge(b):            # ⩾ : mirror of ⩽ (vertex on the right)
     d   = H*0.34
     cs += _poly([(xr,vy-d),(xl,vy-H*0.26-d)],SW)
     return cs
+_eqb = box_of(cmap_g(0x3D))
+EQ_GAP = (_eqb[3]-_eqb[1]) * 0.30 if _eqb else 130    # absolute bar gap, shared by = and !=
 def r_equal(b):         # longer + slightly bolder than the donor "="
-    x0,y0,x1,y1=b; W=x1-x0; cy=(y0+y1)/2; g=(y1-y0)*0.30
+    x0,y0,x1,y1=b; W=x1-x0; cy=(y0+y1)/2; g=EQ_GAP    # fixed gap -> = and != match
     xl=x0-W*0.05; xr=x1+W*0.05                       # extend a touch past the box
     return _poly([(xl,cy+g),(xr,cy+g)],SW)+_poly([(xl,cy-g),(xr,cy-g)],SW)
-def r_prime(b):         # rounded comma-like tick instead of an angular dash
-    x0,y0,x1,y1=b; W=x1-x0; H=y1-y0; cx=(x0+x1)/2
-    return _poly(_catmull([(cx+W*0.16,y1-H*0.10),(cx,(y0+y1)/2+H*0.04),
-                           (cx-W*0.06,y0+H*0.18)],12),SW*0.80)
-for cp, fn in [(0x2264,r_le),(0x2265,r_ge),(0x003D,r_equal),(0x2032,r_prime)]:
+def r_neq(b):           # not-equal: the (new, long) "=" with a slash through it
+    x0,y0,x1,y1=b; cx=(x0+x1)/2; cy=(y0+y1)/2; H=y1-y0
+    return r_equal(b) + _poly([(cx-H*0.20, cy-H*0.52),(cx+H*0.20, cy+H*0.52)], SW)
+for cp, fn in [(0x2264,r_le),(0x2265,r_ge),(0x003D,r_equal),(0x2260,r_neq)]:
     g = cmap_g(cp)
     if g and shape(g, fn):
+        extra += 1
+
+# prime ' '' ''' as raised COMMA shapes — copy the right-single-quote U+2019
+# (it already renders as a clean raised comma) enlarged, n times across the box.
+_quote_g = fira_cmap.get(0x2019)
+def stamp_prime(gname, n, scale=1.35):
+    if gname not in charstrs or _quote_g is None or _quote_g not in charstrs:
+        return False
+    rec = RecordingPen(); charstrs[_quote_g].draw(rec)
+    qb = BoundsPen(None); charstrs[_quote_g].draw(qb)
+    pb = box_of(gname)
+    if not qb.bounds or not pb:
+        return False
+    qx0,qy0,qx1,qy1 = qb.bounds
+    qcx,qcy = (qx0+qx1)/2, (qy0+qy1)/2
+    qw = (qx1-qx0)*scale; step = qw*1.15
+    cx = (pb[0]+pb[2])/2
+    startx = cx - (qw + (n-1)*step)/2 + qw/2          # centre of first copy
+    def df(pen):
+        for k in range(n):
+            tcx = startx + k*step
+            rec.replay(TransformPen(pen, (scale, 0, 0, scale,
+                                          tcx - scale*qcx, qcy*(1-scale))))
+    return emit_pathops(gname, df)
+for cp, n in [(0x2032,1),(0x2033,2),(0x2034,3)]:
+    g = cmap_g(cp)
+    if g and stamp_prime(g, n):
         extra += 1
 
 # --- group 4d: dots / cdot / circ / ast -------------------------------------
@@ -700,33 +787,45 @@ for cp, fn in [(0x230A,d_lfloor),(0x230B,d_rfloor),(0x2308,d_lceil),(0x2309,d_rc
         if b and synth(g, fn(b)):
             extra += 1
 
-# vertical curly braces { } drawn procedurally so the nib + end-curls stay a
-# CONSTANT size at every height (only the straight arms lengthen) — avoids the
-# donor-stretch deformation on tall cases()/matrices.
+# Tall ( ) [ ] { } variants drawn PROCEDURALLY so the curved/cornered ends stay a
+# CONSTANT size & width (only the straight middle lengthens) — avoids the
+# donor-stretch deformation on tall cases()/matrices. Base size stays natural donor.
 BR_W = 92
-def _vbrace(b, left):
-    x0,y0,x1,y1=b; W=x1-x0; cx=(x0+x1)/2; ymid=(y0+y1)/2
+def _vbrace(b, left, W):
+    x0,y0,x1,y1=b; cx=(x0+x1)/2; ymid=(y0+y1)/2
     s = 1 if left else -1                                # left brace: nib points -x
-    spine = cx + s*W*0.10
-    nibw  = W*0.46
-    t     = W*0.20
-    curl  = min(W*0.95, (y1-y0)*0.30)                   # end curl (fixed unless very short)
+    spine = cx + s*W*0.10; nibw = W*0.46; t = W*0.20
+    curl  = min(W*0.95, (y1-y0)*0.30)                   # end curl (fixed)
     run   = min(W*0.70, (y1-y0)*0.22)                   # vertical reach around the nib
-    pts = [(spine + s*t, y1),                           # top terminal (curls toward content)
-           (spine,       y1-curl),
-           (spine,       ymid+run),
+    pts = [(spine + s*t, y1), (spine, y1-curl), (spine, ymid+run),
            (spine - s*nibw, ymid),                      # nib tip
-           (spine,       ymid-run),
-           (spine,       y0+curl),
-           (spine + s*t, y0)]                           # bottom terminal
+           (spine, ymid-run), (spine, y0+curl), (spine + s*t, y0)]
     return _poly(_catmull(pts, 10), BR_W)
-for cp, left in [(0x7B, True), (0x7D, False)]:
+def _vparen(b, left, W):
+    x0,y0,x1,y1=b; cx=(x0+x1)/2
+    s = 1 if left else -1
+    bx = cx - s*W*0.30                                  # bulge (leftmost for "(")
+    tx = cx + s*W*0.26                                  # terminals curve toward content
+    hook = min(W*1.4, (y1-y0)*0.45)                     # end-curve reach (fixed)
+    pts = [(tx, y1-BR_W/2), (bx, y1-hook), (bx, y0+hook), (tx, y0+BR_W/2)]
+    return _poly(_catmull(pts, 16), BR_W)               # straight middle + curved ends
+def _vbracket(b, left, W):
+    x0,y0,x1,y1=b; cx=(x0+x1)/2
+    s = 1 if left else -1
+    spine = cx - s*W*0.28; arm = cx + s*W*0.28
+    pts = [(arm, y1-BR_W/2), (spine, y1-BR_W/2), (spine, y0+BR_W/2), (arm, y0+BR_W/2)]
+    return _poly(pts, BR_W)                             # square corners (rounded caps)
+_proc_delim = {0x28:(_vparen,True), 0x29:(_vparen,False),
+               0x5B:(_vbracket,True), 0x5D:(_vbracket,False),
+               0x7B:(_vbrace,True), 0x7D:(_vbrace,False)}
+for cp,(fn,left) in _proc_delim.items():
     g0 = cmap_g(cp)
     if not g0:
         continue
-    for g in vert_variants(g0):
+    W = _brk_w.get(cp, 300)
+    for g in vert_variants(g0)[1:]:                  # base stays natural donor (above)
         b = box_of(g)
-        if b and synth(g, _vbrace(b, left)):
+        if b and synth(g, fn(b, left, W)):
             extra += 1
 
 # --- diagonal arrows, multi-prime, dotless i/j ------------------------------
@@ -743,17 +842,6 @@ def arrow_diag(b, dx, dy):
 for cp, d in [(0x2197,(1,1)),(0x2198,(1,-1)),(0x2196,(-1,1)),(0x2199,(-1,-1))]:
     g=cmap_g(cp); b=box_of(g) if g else None
     if b and synth(g, arrow_diag(b,*d)):
-        extra += 1
-def prime_n(b, n):                                       # rounded ticks (match single ′)
-    x0,y0,x1,y1=b; W=x1-x0; H=y1-y0; pw=W/n; cs=[]
-    for k in range(n):
-        cx=x0 + pw*(k+0.5)
-        cs+=_poly(_catmull([(cx+pw*0.18,y1-H*0.10),(cx,(y0+y1)/2+H*0.04),
-                            (cx-pw*0.06,y0+H*0.20)],10),SW*0.72)
-    return cs
-for cp, n in [(0x2033,2),(0x2034,3)]:
-    g=cmap_g(cp); b=box_of(g) if g else None
-    if b and synth(g, prime_n(b,n)):
         extra += 1
 for cp in (0x0131, 0x0237):                              # dotless i, j from Comic Relief
     g=cmap_g(cp)
