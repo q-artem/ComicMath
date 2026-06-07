@@ -82,8 +82,9 @@ for row in rows:
     row.sort(key=lambda s: s['cx'])
     row_h = max(s['b'][3] for s in row) - min(s['b'][1] for s in row)
     cur = [row[0]]; right = row[0]['b'][2]; n0 = len(letters)
+    _frac = float(os.environ.get("SPLIT_FRAC", "0.16"))
     for s in row[1:]:
-        if s['b'][0] - right > 0.16*row_h:
+        if s['b'][0] - right > _frac*row_h:
             letters.append(cur); cur = [s]
         else:
             cur.append(s)

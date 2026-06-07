@@ -280,9 +280,10 @@ def graft_symbol(gname, donor_cp, stroke_cap=False, size_cap=None):
     return True
 
 # single-glyph operators / relations (skipped silently if donor lacks the cp)
-SIMPLE = [0x2202, 0x221E, 0x00B1, 0x00D7, 0x00F7, 0x2212, 0x002B, 0x003D,
-          0x2260, 0x2264, 0x2265, 0x2248, 0x2192, 0x21D2, 0x2208,
-          0x2219, 0x003C, 0x003E, 0x00AC, 0x2113, 0x2032, 0x2026]  # bullet < > neg ell prime ldots
+SIMPLE = [0x2202, 0x221E, 0x00B1, 0x00D7, 0x00F7, 0x2212, 0x002B,
+          0x2260, 0x2248, 0x2192, 0x21D2, 0x2208,
+          0x2219, 0x003C, 0x003E, 0x00AC, 0x2113, 0x2026]  # bullet < > neg ell ldots
+          # =, <=, >=, prime are synthesised below (rounded/Russian-style/larger)
 # big operators: each maps to its inline + .display variant glyph names
 BIG = {0x2211: ["uni2211", "uni2211.display"],
        0x220F: ["uni220F", "uni220F.display"],
@@ -370,11 +371,11 @@ def draw_comic_radical(gname, w):
     H  = y1 - y0
     top = y1 - w/2                                  # arm centreline (top edge at y1)
     # control points: small rounded foot -> bottom -> rise -> peak -> arm -> flat end
-    ctrl = [(x0 + 0.14*Wd, y0 + 0.24*H),           # flag tip (short, rounded foot)
-            (x0 + 0.27*Wd, y0 + 0.05*H + 0.3*w),   # rounded bottom
-            (x0 + 0.46*Wd, top - 0.05*H),          # lower rise (gentle bow)
-            (x0 + 0.53*Wd, top),                   # peak / start of arm
-            (x0 + 0.70*Wd, top),                   # arm (horizontal tangent)
+    ctrl = [(x0 + 0.16*Wd, y0 + 0.26*H),           # flag tip (short, rounded foot)
+            (x0 + 0.33*Wd, y0 + 0.05*H + 0.3*w),   # rounded bottom
+            (x0 + 0.62*Wd, top - 0.05*H),          # lower rise (steeper, peak later)
+            (x0 + 0.76*Wd, top),                   # peak near advance -> short arm
+            (x0 + 0.88*Wd, top),                   # short arm (horizontal tangent)
             (W, top)]                              # arm end -> flat butt at vinculum
     center = _catmull(ctrl, n=14)                   # smooth dense centreline
     center = [(x, min(y, top)) for x, y in center]  # clamp out spline overshoot above arm
@@ -443,7 +444,7 @@ def vert_variants(gname):
     con = _vv.get(gname)
     return [r.VariantGlyph for r in con.MathGlyphVariantRecord] if con else [gname]
 
-for cp in [0x28, 0x29, 0x5B, 0x5D, 0x7B, 0x7D, 0x7C]:
+for cp in [0x28, 0x29, 0x5B, 0x5D, 0x7C]:             # { } drawn procedurally below
     g0 = fira_cmap.get(cp)
     if not g0:
         continue
@@ -537,13 +538,19 @@ def arrow_h(b, head_l, head_r, double=False, barl=False):
     x0, y0, x1, y1 = b
     cy = (y0+y1)/2
     x0 += SW/2; x1 -= SW/2
-    hl = min((x1-x0)*0.34, (y1-y0)*0.42); sp = hl*0.62
+    if double:
+        g  = SW*0.95                                       # line offset
+        hl = min((x1-x0)*0.42, (y1-y0)*0.66); sp = g + SW*1.05  # head taller than the gap
+    else:
+        g  = 0.0
+        hl = min((x1-x0)*0.34, (y1-y0)*0.42); sp = hl*0.62
+    xr = (x1-hl*0.9) if head_r else x1                     # shafts stop at the head base
+    xl = (x0+hl*0.9) if head_l else x0
     cs = []
     if double:
-        g = SW*0.85
-        cs += _poly([(x0,cy+g),(x1-hl*0.5,cy+g)],SW) + _poly([(x0,cy-g),(x1-hl*0.5,cy-g)],SW)
+        cs += _poly([(xl,cy+g),(xr,cy+g)],SW) + _poly([(xl,cy-g),(xr,cy-g)],SW)
     else:
-        cs += _poly([(x0,cy),(x1,cy)],SW)
+        cs += _poly([(xl,cy),(xr,cy)],SW)
     if head_r: cs += _poly([(x1-hl,cy+sp),(x1,cy),(x1-hl,cy-sp)],SW)
     if head_l: cs += _poly([(x0+hl,cy+sp),(x0,cy),(x0+hl,cy-sp)],SW)
     if barl:   cs += _poly([(x0,cy-(y1-y0)*0.28),(x0,cy+(y1-y0)*0.28)],SW)
@@ -627,12 +634,40 @@ for cp, fn in [(0x223C,r_sim),(0x2261,r_equiv),(0x2245,r_cong),(0x2243,r_simeq)]
     if g and shape(g, fn):
         extra += 1
 
+# --- group 4c': Russian-style <= >=, longer =, rounded prime ----------------
+def r_le(b):            # ⩽ : chevron + slanted bar parallel to its lower arm
+    x0,y0,x1,y1=b; xl,xr=x0+SW/2,x1-SW/2; H=y1-y0; vy=y0+H*0.60
+    cs  = _poly([(xr,y1-SW/2),(xl,vy)],SW)          # upper arm -> vertex (left)
+    cs += _poly([(xl,vy),(xr,vy-H*0.26)],SW)        # lower arm (down to right)
+    d   = H*0.34
+    cs += _poly([(xl,vy-d),(xr,vy-H*0.26-d)],SW)    # bar parallel to lower arm
+    return cs
+def r_ge(b):            # ⩾ : mirror of ⩽ (vertex on the right)
+    x0,y0,x1,y1=b; xl,xr=x0+SW/2,x1-SW/2; H=y1-y0; vy=y0+H*0.60
+    cs  = _poly([(xl,y1-SW/2),(xr,vy)],SW)
+    cs += _poly([(xr,vy),(xl,vy-H*0.26)],SW)
+    d   = H*0.34
+    cs += _poly([(xr,vy-d),(xl,vy-H*0.26-d)],SW)
+    return cs
+def r_equal(b):         # longer + slightly bolder than the donor "="
+    x0,y0,x1,y1=b; W=x1-x0; cy=(y0+y1)/2; g=(y1-y0)*0.30
+    xl=x0-W*0.05; xr=x1+W*0.05                       # extend a touch past the box
+    return _poly([(xl,cy+g),(xr,cy+g)],SW)+_poly([(xl,cy-g),(xr,cy-g)],SW)
+def r_prime(b):         # rounded comma-like tick instead of an angular dash
+    x0,y0,x1,y1=b; W=x1-x0; H=y1-y0; cx=(x0+x1)/2
+    return _poly(_catmull([(cx+W*0.16,y1-H*0.10),(cx,(y0+y1)/2+H*0.04),
+                           (cx-W*0.06,y0+H*0.18)],12),SW*0.80)
+for cp, fn in [(0x2264,r_le),(0x2265,r_ge),(0x003D,r_equal),(0x2032,r_prime)]:
+    g = cmap_g(cp)
+    if g and shape(g, fn):
+        extra += 1
+
 # --- group 4d: dots / cdot / circ / ast -------------------------------------
-def d_cdot(b):  x0,y0,x1,y1=b; return [_disc((x0+x1)/2,(y0+y1)/2,SW*0.62)]
+def d_cdot(b):  x0,y0,x1,y1=b; return [_disc((x0+x1)/2,(y0+y1)/2,SW*0.85)]
 def d_cdots(b): x0,y0,x1,y1=b; cy=(y0+y1)/2; xs=[x0+(x1-x0)*t for t in (0.2,0.5,0.8)]; return [_disc(x,cy,SW*0.55) for x in xs]
 def d_vdots(b): x0,y0,x1,y1=b; cx=(x0+x1)/2; ys=[y0+(y1-y0)*t for t in (0.2,0.5,0.8)]; return [_disc(cx,y,SW*0.55) for y in ys]
 def d_ddots(b): x0,y0,x1,y1=b; ts=(0.2,0.5,0.8); return [_disc(x0+(x1-x0)*t,y0+(y1-y0)*(1-t),SW*0.55) for t in ts]
-def d_circ(b):  x0,y0,x1,y1=b; return _ring((x0+x1)/2,(y0+y1)/2, min(x1-x0,y1-y0)/2-SW*0.35, SW*0.62, n=28)
+def d_circ(b):  x0,y0,x1,y1=b; return _ring((x0+x1)/2,(y0+y1)/2, min(x1-x0,y1-y0)/2-SW*0.12, SW*0.72, n=28)
 def d_ast(b):
     x0,y0,x1,y1=b; cx,cy=(x0+x1)/2,(y0+y1)/2; r=min(x1-x0,y1-y0)*0.42; cs=[]
     for k in range(3):
@@ -665,6 +700,35 @@ for cp, fn in [(0x230A,d_lfloor),(0x230B,d_rfloor),(0x2308,d_lceil),(0x2309,d_rc
         if b and synth(g, fn(b)):
             extra += 1
 
+# vertical curly braces { } drawn procedurally so the nib + end-curls stay a
+# CONSTANT size at every height (only the straight arms lengthen) — avoids the
+# donor-stretch deformation on tall cases()/matrices.
+BR_W = 92
+def _vbrace(b, left):
+    x0,y0,x1,y1=b; W=x1-x0; cx=(x0+x1)/2; ymid=(y0+y1)/2
+    s = 1 if left else -1                                # left brace: nib points -x
+    spine = cx + s*W*0.10
+    nibw  = W*0.46
+    t     = W*0.20
+    curl  = min(W*0.95, (y1-y0)*0.30)                   # end curl (fixed unless very short)
+    run   = min(W*0.70, (y1-y0)*0.22)                   # vertical reach around the nib
+    pts = [(spine + s*t, y1),                           # top terminal (curls toward content)
+           (spine,       y1-curl),
+           (spine,       ymid+run),
+           (spine - s*nibw, ymid),                      # nib tip
+           (spine,       ymid-run),
+           (spine,       y0+curl),
+           (spine + s*t, y0)]                           # bottom terminal
+    return _poly(_catmull(pts, 10), BR_W)
+for cp, left in [(0x7B, True), (0x7D, False)]:
+    g0 = cmap_g(cp)
+    if not g0:
+        continue
+    for g in vert_variants(g0):
+        b = box_of(g)
+        if b and synth(g, _vbrace(b, left)):
+            extra += 1
+
 # --- diagonal arrows, multi-prime, dotless i/j ------------------------------
 def arrow_diag(b, dx, dy):
     x0,y0,x1,y1=b; r=SW/2
@@ -680,11 +744,12 @@ for cp, d in [(0x2197,(1,1)),(0x2198,(1,-1)),(0x2196,(-1,1)),(0x2199,(-1,-1))]:
     g=cmap_g(cp); b=box_of(g) if g else None
     if b and synth(g, arrow_diag(b,*d)):
         extra += 1
-def prime_n(b, n):
-    x0,y0,x1,y1=b; W=x1-x0; cs=[]
+def prime_n(b, n):                                       # rounded ticks (match single ′)
+    x0,y0,x1,y1=b; W=x1-x0; H=y1-y0; pw=W/n; cs=[]
     for k in range(n):
-        xx=x0 + W*(k+0.5)/n
-        cs+=_poly([(xx-W*0.10, y0+(y1-y0)*0.15),(xx+W*0.10, y1-(y1-y0)*0.10)], SW*0.75)
+        cx=x0 + pw*(k+0.5)
+        cs+=_poly(_catmull([(cx+pw*0.18,y1-H*0.10),(cx,(y0+y1)/2+H*0.04),
+                            (cx-pw*0.06,y0+H*0.20)],10),SW*0.72)
     return cs
 for cp, n in [(0x2033,2),(0x2034,3)]:
     g=cmap_g(cp); b=box_of(g) if g else None
@@ -729,7 +794,7 @@ for cp, fn in [(0x23DE,hb_overbrace),(0x23DF,hb_underbrace),(0x23B4,hb_overbrack
 AW = 74
 def ac_hat(b):   x0,y0,x1,y1=b; r=AW/2; return _poly([(x0+r,y0+r),((x0+x1)/2,y1-r),(x1-r,y0+r)],AW)
 def ac_check(b): x0,y0,x1,y1=b; r=AW/2; return _poly([(x0+r,y1-r),((x0+x1)/2,y0+r),(x1-r,y1-r)],AW)
-def ac_bar(b):   x0,y0,x1,y1=b; r=AW/2; cy=(y0+y1)/2; return _poly([(x0+r,cy),(x1-r,cy)],AW)
+def ac_bar(b):   x0,y0,x1,y1=b; r=AW/2; cy=(y0+y1)/2; bow=min((x1-x0)*0.05, AW*1.6); return _poly(_catmull([(x0+r,cy-bow*0.35),((x0+x1)/2,cy+bow),(x1-r,cy-bow*0.35)],12),AW)
 def ac_tilde(b): x0,y0,x1,y1=b; r=AW/2; cy=(y0+y1)/2; return _poly(_wave(x0+r,x1-r,cy,(y1-y0)*0.30),AW)
 def ac_dot(b):   x0,y0,x1,y1=b; return [_disc((x0+x1)/2,(y0+y1)/2,AW*0.62)]
 def ac_ddot(b):  x0,y0,x1,y1=b; cy=(y0+y1)/2; g=(x1-x0)*0.26; cx=(x0+x1)/2; return [_disc(cx-g,cy,AW*0.55),_disc(cx+g,cy,AW*0.55)]
@@ -822,6 +887,7 @@ BB_UP = {'A':0x1D538,'B':0x1D539,'C':0x2102,'D':0x1D53B,'E':0x1D53C,'F':0x1D53D,
 # descender to ~y=900. Any width; advance auto-fit with sidebearings. y flips.
 SVG_BASELINE = 800
 BB_EMBOLDEN = 10        # grow hand-drawn blackboard strokes outward (units), 0 = off
+BB_SCALE = 1.06         # hand-drawn letters read a touch small vs caps -> scale up ~6%
 def _style(el, key):
     v = el.get(key)
     if v:
@@ -926,6 +992,9 @@ def load_svg_glyph(svgpath, sb=40):
         except pathops.PathOpsError:
             acc.fillType = pathops.FillType.WINDING   # raw union, nonzero fill
     acc.convertConicsToQuads(0.5)
+    if BB_SCALE != 1.0 and acc.bounds:                # scale about the baseline (y=0)
+        sc = pathops.Path(); acc.draw(TransformPen(sc.getPen(), (BB_SCALE, 0, 0, BB_SCALE, 0, 0)))
+        acc = sc
     if BB_EMBOLDEN and acc.bounds:                    # thicken strokes outward
         rib = pathops.Path(); acc.draw(rib.getPen())
         rib.stroke(2*BB_EMBOLDEN, pathops.LineCap.ROUND_CAP,
@@ -1013,6 +1082,15 @@ for fld, val in [("FractionRuleThickness", 88), ("RadicalRuleThickness", RAD_W),
     rec = getattr(mc, fld)
     if rec is not None:
         rec.Value = val
+# radical degree (root index n) spacing: don't let the small n stick to the sign
+for fld, val in [("RadicalKernBeforeDegree", 220), ("RadicalKernAfterDegree", -200),
+                 ("RadicalDegreeBottomRaisePercent", 64)]:
+    rec = getattr(mc, fld, None)
+    if rec is not None:
+        if hasattr(rec, "Value"):
+            rec.Value = val
+        else:
+            setattr(mc, fld, val)
 print(f"grafted {sym_done} symbol glyphs from Comic Relief; tuned rule thicknesses")
 
 name = fira["name"]
