@@ -97,6 +97,12 @@ for cp in range(0x0391, 0x03AA):
         continue
     jobs.append((cp, cp, gk_cmap, gk_gs, G_CAP, 0))
 
+# --- Cyrillic (Comic Relief) for text-in-math, e.g. subscript "дуга" ----------
+for cp in list(range(0x0410, 0x0430)) + [0x0401]:    # А-Я + Ё (upright)
+    jobs.append((cp, cp, gk_cmap, gk_gs, G_CAP, 0))
+for cp in list(range(0x0430, 0x0450)) + [0x0451]:    # а-я + ё
+    jobs.append((cp, cp, gk_cmap, gk_gs, G_LOW, 0))
+
 # --- Bold + Bold-italic (Comic Relief Bold; donor is upright -> shear italics) -
 for i in range(26):                                   # bold / bold-italic Latin
     jobs.append((0x1D400 + i, 0x41 + i, crb_cmap, crb_gs, B_CAP, 0))
@@ -752,7 +758,7 @@ BB_UP = {'A':0x1D538,'B':0x1D539,'C':0x2102,'D':0x1D53B,'E':0x1D53C,'F':0x1D53D,
 # Convention: viewBox height 1000, BASELINE at y=800, cap line at y=111 (cap 689),
 # descender to ~y=900. Any width; advance auto-fit with sidebearings. y flips.
 SVG_BASELINE = 800
-BB_EMBOLDEN = 22        # grow hand-drawn blackboard strokes outward (units), 0 = off
+BB_EMBOLDEN = 10        # grow hand-drawn blackboard strokes outward (units), 0 = off
 def _style(el, key):
     v = el.get(key)
     if v:
