@@ -740,69 +740,54 @@ for i in range(26):
 for i in range(10):
     alias(0x1D7F6+i, 0x30+i)                                     # mono digits
 
-# --- blackboard double-struck: outline the comic letter via pathops.stroke ---
-def _outline_cs(srcname, w=50, sb=40):
-    p = pathops.Path(); charstrs[srcname].draw(p.getPen())
-    p.stroke(w, pathops.LineCap.ROUND_CAP, pathops.LineJoin.ROUND_JOIN, 4)
-    p.convertConicsToQuads(0.5)
-    p = pathops.simplify(p, fix_winding=True)
-    xmin, _, xmax, _ = p.bounds                          # set advance from real ink span
-    dx = sb - xmin
-    width = (xmax - xmin) + 2*sb
-    t2 = T2CharStringPen(width, None)
-    p.draw(TransformPen(Qu2CuPen(t2, max_err=0.6), (1, 0, 0, 1, dx, 0)))
-    return t2.getCharString(private=private, globalSubrs=gsubrs), width
-def place_bb(cp, srcname, w=50):
-    if srcname not in charstrs:
-        return False
-    cs, width = _outline_cs(srcname, w)
-    name = None
-    for t in fira["cmap"].tables:
-        if cp in t.cmap:
-            name = t.cmap[cp]; break
-    if name and name in charstrs:                        # slot exists -> replace
-        charstrs[name] = cs; hmtx.metrics[name] = (int(round(width)), 0)
-    else:                                                # new glyph
-        name = "cm_bb_%04X" % cp
-        add_glyph(name, cs, width); add_cmap(cp, name)
-    return True
-
+# --- blackboard: keep Fira's real double-struck, override only where an SVG ---
+# is provided in svg/bb/. (Auto-outline removed — user draws proper double-struck.)
 BB_UP = {'A':0x1D538,'B':0x1D539,'C':0x2102,'D':0x1D53B,'E':0x1D53C,'F':0x1D53D,
          'G':0x1D53E,'H':0x210D,'I':0x1D540,'J':0x1D541,'K':0x1D542,'L':0x1D543,
          'M':0x1D544,'N':0x2115,'O':0x1D546,'P':0x2119,'Q':0x211A,'R':0x211D,
          'S':0x1D54A,'T':0x1D54B,'U':0x1D54C,'V':0x1D54D,'W':0x1D54E,'X':0x1D54F,
          'Y':0x1D550,'Z':0x2124}
-for ch, cp in BB_UP.items():
-    if place_bb(cp, fira_cmap[ord(ch)]):
-        extra += 1
-for i in range(26):                                      # bb lowercase U+1D552..
-    if place_bb(0x1D552 + i, fira_cmap[0x61 + i]):
-        extra += 1
-for i in range(10):                                      # bb digits U+1D7D8..
-    if place_bb(0x1D7D8 + i, fira_cmap[0x30 + i]):
-        extra += 1
 
 # --- hand-drawn SVG override for blackboard (svg/bb/<NAME>.svg) --------------
 # Convention: viewBox height 1000, BASELINE at y=800, cap line at y=111 (cap 689),
 # descender to ~y=900. Any width; advance auto-fit with sidebearings. y flips.
 SVG_BASELINE = 800
+def _style(el, key):
+    v = el.get(key)
+    if v:
+        return v
+    for part in (el.get('style') or '').split(';'):
+        if ':' in part and part.split(':', 1)[0].strip() == key:
+            return part.split(':', 1)[1].strip()
+    return None
+
 def load_svg_glyph(svgpath, sb=40):
+    """Accept both FILLED paths (Inkscape) and STROKED centreline paths (Rnote):
+    a path with fill:none + stroke is stroked by its stroke-width; else filled."""
     root = ET.parse(svgpath).getroot()
     paths = root.findall('.//{http://www.w3.org/2000/svg}path') or root.findall('.//path')
-    rec = RecordingPen()
-    for pth in paths:
-        d = pth.get('d')
-        if d:
-            parse_path(d, rec)
-    bp = BoundsPen({}); rec.replay(TransformPen(bp, (1, 0, 0, -1, 0, SVG_BASELINE)))
-    if not bp.bounds:
+    flip = (1, 0, 0, -1, 0, SVG_BASELINE)
+    acc = pathops.Path()
+    for el in paths:
+        d = el.get('d')
+        if not d:
+            continue
+        rec = RecordingPen(); parse_path(d, rec)
+        sub = pathops.Path(); rec.replay(TransformPen(sub.getPen(), flip))
+        fill, stroke, sw = _style(el, 'fill'), _style(el, 'stroke'), _style(el, 'stroke-width')
+        if fill in ('none', 'transparent') and stroke and stroke != 'none':   # stroked centreline
+            sub.stroke(float(sw) if sw else 28,
+                       pathops.LineCap.ROUND_CAP, pathops.LineJoin.ROUND_JOIN, 4)
+            sub.convertConicsToQuads(0.5)
+        acc.addPath(sub)
+    acc = pathops.simplify(acc, fix_winding=True)
+    acc.convertConicsToQuads(0.5)
+    if not acc.bounds:
         return None
-    xmin, _, xmax, _ = bp.bounds
+    xmin, _, xmax, _ = acc.bounds
     dx = sb - xmin; adv = int(round((xmax - xmin) + 2*sb))
-    pp = pathops.Path()
-    rec.replay(TransformPen(pp.getPen(), (1, 0, 0, -1, dx, SVG_BASELINE)))
-    pp = pathops.simplify(pp, fix_winding=True)
-    t2 = T2CharStringPen(adv, None); pp.draw(Qu2CuPen(t2, max_err=0.6))
+    t2 = T2CharStringPen(adv, None)
+    acc.draw(TransformPen(Qu2CuPen(t2, max_err=0.6), (1, 0, 0, 1, dx, 0)))
     return t2.getCharString(private=private, globalSubrs=gsubrs), adv
 
 _svg_map = dict(BB_UP)                                    # 'A'..'Z' -> bb codepoint

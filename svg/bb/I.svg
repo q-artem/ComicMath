@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 1000">
-  <!-- test double-struck I: baseline y=800, cap line y=111 -->
-  <path d="M250 111 L290 111 L290 800 L250 800 Z
-           M330 111 L370 111 L370 800 L330 800 Z
-           M210 111 L410 111 L410 151 L210 151 Z
-           M210 760 L410 760 L410 800 L210 800 Z" fill="black"/>
-</svg>
