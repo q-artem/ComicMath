@@ -733,6 +733,10 @@ for i in range(26):
     alias(0x1D622+i, 0x210E if i == 7 else 0x1D44E+i)             # sans-italic low (h->planck)
 for i in range(10):
     alias(0x1D7E2+i, 0x30+i); alias(0x1D7EC+i, 0x1D7CE+i)         # sans / sans-bold digits
+for i in range(26):
+    alias(0x1D670+i, 0x41+i); alias(0x1D68A+i, 0x61+i)           # mono -> comic letters
+for i in range(10):
+    alias(0x1D7F6+i, 0x30+i)                                     # mono digits
 
 # --- blackboard double-struck: outline the comic letter via pathops.stroke ---
 def _outline_cs(srcname, w=50, sb=40):
@@ -774,6 +778,34 @@ for i in range(26):                                      # bb lowercase U+1D552.
         extra += 1
 for i in range(10):                                      # bb digits U+1D7D8..
     if place_bb(0x1D7D8 + i, fira_cmap[0x30 + i]):
+        extra += 1
+
+# --- fraktur (new glyphs from UnifrakturCook, blackletter donor) -------------
+frk = TTFont("fonts/donor-UnifrakturCook-Bold.ttf")
+frk_cmap = frk.getBestCmap(); frk_gs = frk.getGlyphSet()
+_fnb = BoundsPen(frk_gs); frk_gs[frk_cmap[ord('N')]].draw(_fnb)
+S_FRK = F_CAP / (_fnb.bounds[3] - _fnb.bounds[1])               # measured cap height
+FRAK_UP = {'A':0x1D504,'B':0x1D505,'C':0x212D,'D':0x1D507,'E':0x1D508,'F':0x1D509,
+           'G':0x1D50A,'H':0x210C,'I':0x2111,'J':0x1D50D,'K':0x1D50E,'L':0x1D50F,
+           'M':0x1D510,'N':0x1D511,'O':0x1D512,'P':0x1D513,'Q':0x1D514,'R':0x211C,
+           'S':0x1D516,'T':0x1D517,'U':0x1D518,'V':0x1D519,'W':0x1D51A,'X':0x1D51B,
+           'Y':0x1D51C,'Z':0x2128}
+FRAK_LOW = {chr(0x61+i): 0x1D51E+i for i in range(26)}
+def add_frak(ch, cp):
+    src = frk_cmap.get(ord(ch))
+    if src is None:
+        return False
+    rec = DecomposingRecordingPen(frk_gs); frk_gs[src].draw(rec)
+    adv = frk["hmtx"][src][0] * S_FRK
+    t2 = T2CharStringPen(adv, None)
+    rec.replay(TransformPen(Qu2CuPen(t2, max_err=0.6, reverse_direction=True),
+                            (S_FRK, 0, 0, S_FRK, 0, 0)))
+    name = "cm_frak_%04X" % cp
+    add_glyph(name, t2.getCharString(private=private, globalSubrs=gsubrs), adv)
+    add_cmap(cp, name)
+    return True
+for ch, cp in {**FRAK_UP, **FRAK_LOW}.items():
+    if add_frak(ch, cp):
         extra += 1
 
 fira.setGlyphOrder(_orig_order + _new_names)            # set order ONCE (all new glyphs)
