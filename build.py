@@ -752,6 +752,7 @@ BB_UP = {'A':0x1D538,'B':0x1D539,'C':0x2102,'D':0x1D53B,'E':0x1D53C,'F':0x1D53D,
 # Convention: viewBox height 1000, BASELINE at y=800, cap line at y=111 (cap 689),
 # descender to ~y=900. Any width; advance auto-fit with sidebearings. y flips.
 SVG_BASELINE = 800
+BB_EMBOLDEN = 22        # grow hand-drawn blackboard strokes outward (units), 0 = off
 def _style(el, key):
     v = el.get(key)
     if v:
@@ -788,6 +789,17 @@ def load_svg_glyph(svgpath, sb=40):
         except pathops.PathOpsError:
             acc.fillType = pathops.FillType.WINDING   # raw union, nonzero fill
     acc.convertConicsToQuads(0.5)
+    if BB_EMBOLDEN and acc.bounds:                    # thicken strokes outward
+        rib = pathops.Path(); acc.draw(rib.getPen())
+        rib.stroke(2*BB_EMBOLDEN, pathops.LineCap.ROUND_CAP,
+                   pathops.LineJoin.ROUND_JOIN, 4)
+        rib.convertConicsToQuads(0.5)
+        try:
+            bld = pathops.OpBuilder(fix_winding=True, keep_starting_points=False)
+            bld.add(acc, pathops.PathOp.UNION); bld.add(rib, pathops.PathOp.UNION)
+            acc = bld.resolve()
+        except pathops.PathOpsError:
+            acc.addPath(rib); acc.fillType = pathops.FillType.WINDING
     if not acc.bounds:
         return None
     xmin, _, xmax, _ = acc.bounds
