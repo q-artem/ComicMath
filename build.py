@@ -594,6 +594,36 @@ for cp, fn in [(0x230A,d_lfloor),(0x230B,d_rfloor),(0x2308,d_lceil),(0x2309,d_rc
         if b and synth(g, fn(b)):
             extra += 1
 
+# --- diagonal arrows, multi-prime, dotless i/j ------------------------------
+def arrow_diag(b, dx, dy):
+    x0,y0,x1,y1=b; r=SW/2
+    tail=(x0+r if dx>0 else x1-r, y0+r if dy>0 else y1-r)
+    tip =(x1-r if dx>0 else x0+r, y1-r if dy>0 else y0+r)
+    cs=_poly([tail,tip],SW)
+    ang=math.atan2(tip[1]-tail[1], tip[0]-tail[0]); hl=min(x1-x0,y1-y0)*0.36
+    for da in (math.radians(148), math.radians(-148)):
+        a=ang+da
+        cs+=_poly([tip,(tip[0]+hl*math.cos(a), tip[1]+hl*math.sin(a))],SW)
+    return cs
+for cp, d in [(0x2197,(1,1)),(0x2198,(1,-1)),(0x2196,(-1,1)),(0x2199,(-1,-1))]:
+    g=cmap_g(cp); b=box_of(g) if g else None
+    if b and synth(g, arrow_diag(b,*d)):
+        extra += 1
+def prime_n(b, n):
+    x0,y0,x1,y1=b; W=x1-x0; cs=[]
+    for k in range(n):
+        xx=x0 + W*(k+0.5)/n
+        cs+=_poly([(xx-W*0.10, y0+(y1-y0)*0.15),(xx+W*0.10, y1-(y1-y0)*0.10)], SW*0.75)
+    return cs
+for cp, n in [(0x2033,2),(0x2034,3)]:
+    g=cmap_g(cp); b=box_of(g) if g else None
+    if b and synth(g, prime_n(b,n)):
+        extra += 1
+for cp in (0x0131, 0x0237):                              # dotless i, j from Comic Relief
+    g=cmap_g(cp)
+    if g and graft_symbol(g, cp):
+        extra += 1
+
 # --- horizontal stretchy over/under braces, brackets, parens ----------------
 _hv = dict(zip(mvar.HorizGlyphCoverage.glyphs, mvar.HorizGlyphConstruction)) \
     if mvar.HorizGlyphCoverage else {}
@@ -647,49 +677,7 @@ for cp, fn in [(0x0302,ac_hat),(0x030C,ac_check),(0x0304,ac_bar),(0x0305,ac_bar)
     if g and shape(g, fn):
         extra += 1
 
-# --- blackboard bold numbers ℕ ℤ ℚ ℝ ℂ ℙ ℍ (hand-drawn double-struck) --------
-BBW, BBG = 44, 84   # blackboard stroke + doubling gap
-def _off(p, q, d):
-    dx, dy = q[0]-p[0], q[1]-p[1]; L = math.hypot(dx, dy) or 1
-    nx, ny = -dy/L*d, dx/L*d
-    return [(p[0]+nx, p[1]+ny), (q[0]+nx, q[1]+ny)]
-def _dl(p, q, sw, d):  return _poly([p, q], sw) + _poly(_off(p, q, d), sw)
-def _dv(x, y0, y1, sw, g): return _poly([(x,y0),(x,y1)], sw) + _poly([(x+g,y0),(x+g,y1)], sw)
-
-def bb_N(b):
-    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r
-    return _dv(xl,y0,y1,BBW,BBG)+_poly([(xl+BBG,y1),(xr,y0)],BBW)+_poly([(xr,y0),(xr,y1)],BBW)
-def bb_H(b):
-    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r; cy=(y0+y1)/2
-    return _dv(xl,y0,y1,BBW,BBG)+_poly([(xr,y0),(xr,y1)],BBW)+_poly([(xl,cy),(xr,cy)],BBW)
-def bb_Z(b):
-    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r
-    return _poly([(xl,y1),(xr,y1)],BBW)+_poly([(xl,y0),(xr,y0)],BBW)+_dl((xr,y1),(xl,y0),BBW,BBG)
-def bb_P(b):
-    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r; cy=(y0+y1)/2
-    bowl=_catmull([(xl+BBG,y1),(xr,y1),(xr,(y1+cy)/2),(xl+BBG,cy)],8)
-    return _dv(xl,y0,y1,BBW,BBG)+_poly(bowl,BBW)
-def bb_R(b):
-    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r; m=y0+(y1-y0)*0.5
-    bowl=_catmull([(xl+BBG,y1),(xr,y1),(xr,(y1+m)/2),(xl+BBG,m)],8)
-    leg=_poly([(xl+BBG+(xr-xl)*0.15,m),(xr,y0)],BBW)
-    return _dv(xl,y0,y1,BBW,BBG)+_poly(bowl,BBW)+leg
-def bb_C(b):
-    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r; cy=(y0+y1)/2; h=y1-y0
-    arc=_catmull([(xr,y1-r),((xl+xr)/2,y1-r),(xl,cy),((xl+xr)/2,y0+r),(xr,y0+r)],10)
-    return _poly(arc,BBW)+_poly([(xl+BBG,cy-h*0.27),(xl+BBG,cy+h*0.27)],BBW)
-def bb_Q(b):
-    x0,y0,x1,y1=b; cx,cy=(x0+x1)/2,(y0+y1)/2; R=min(x1-x0,y1-y0)/2-BBW/2
-    ring=_ring(cx,cy,R,BBW,n=36)
-    bar=_poly([(cx-R+BBG,cy-R*0.45),(cx-R+BBG,cy+R*0.45)],BBW)
-    tail=_poly([(cx+R*0.30,y0+(y1-y0)*0.30),(cx+R*0.95,y0)],BBW)
-    return ring+bar+tail
-
-for cp, fn in [(0x2115,bb_N),(0x2124,bb_Z),(0x211A,bb_Q),(0x211D,bb_R),
-               (0x2102,bb_C),(0x2119,bb_P),(0x210D,bb_H)]:
-    g = cmap_g(cp)
-    if g and shape(g, fn):
-        extra += 1
+# (blackboard moved below — auto-outline via pathops.stroke, after add_glyph)
 
 # --- calligraphic alphabet (new glyphs from Pacifico, casual script) ---------
 _orig_order = list(fira.getGlyphOrder())
@@ -731,6 +719,61 @@ def add_cal(ch, cp):
     return True
 for ch, cp in {**SCRIPT_UP, **SCRIPT_LOW}.items():
     if add_cal(ch, cp):
+        extra += 1
+
+# --- sans-serif: our comic letters ARE sans -> alias slots to existing glyphs -
+def alias(cp, src_cp):
+    nm = fira_cmap.get(src_cp)
+    if nm:
+        add_cmap(cp, nm)
+for i in range(26):
+    alias(0x1D5A0+i, 0x41+i); alias(0x1D5BA+i, 0x61+i)            # sans up/low
+    alias(0x1D5D4+i, 0x1D400+i); alias(0x1D5EE+i, 0x1D41A+i)      # sans-bold up/low
+    alias(0x1D608+i, 0x1D434+i)                                   # sans-italic up
+    alias(0x1D622+i, 0x210E if i == 7 else 0x1D44E+i)             # sans-italic low (h->planck)
+for i in range(10):
+    alias(0x1D7E2+i, 0x30+i); alias(0x1D7EC+i, 0x1D7CE+i)         # sans / sans-bold digits
+
+# --- blackboard double-struck: outline the comic letter via pathops.stroke ---
+def _outline_cs(srcname, w=50, sb=40):
+    p = pathops.Path(); charstrs[srcname].draw(p.getPen())
+    p.stroke(w, pathops.LineCap.ROUND_CAP, pathops.LineJoin.ROUND_JOIN, 4)
+    p.convertConicsToQuads(0.5)
+    p = pathops.simplify(p, fix_winding=True)
+    xmin, _, xmax, _ = p.bounds                          # set advance from real ink span
+    dx = sb - xmin
+    width = (xmax - xmin) + 2*sb
+    t2 = T2CharStringPen(width, None)
+    p.draw(TransformPen(Qu2CuPen(t2, max_err=0.6), (1, 0, 0, 1, dx, 0)))
+    return t2.getCharString(private=private, globalSubrs=gsubrs), width
+def place_bb(cp, srcname, w=50):
+    if srcname not in charstrs:
+        return False
+    cs, width = _outline_cs(srcname, w)
+    name = None
+    for t in fira["cmap"].tables:
+        if cp in t.cmap:
+            name = t.cmap[cp]; break
+    if name and name in charstrs:                        # slot exists -> replace
+        charstrs[name] = cs; hmtx.metrics[name] = (int(round(width)), 0)
+    else:                                                # new glyph
+        name = "cm_bb_%04X" % cp
+        add_glyph(name, cs, width); add_cmap(cp, name)
+    return True
+
+BB_UP = {'A':0x1D538,'B':0x1D539,'C':0x2102,'D':0x1D53B,'E':0x1D53C,'F':0x1D53D,
+         'G':0x1D53E,'H':0x210D,'I':0x1D540,'J':0x1D541,'K':0x1D542,'L':0x1D543,
+         'M':0x1D544,'N':0x2115,'O':0x1D546,'P':0x2119,'Q':0x211A,'R':0x211D,
+         'S':0x1D54A,'T':0x1D54B,'U':0x1D54C,'V':0x1D54D,'W':0x1D54E,'X':0x1D54F,
+         'Y':0x1D550,'Z':0x2124}
+for ch, cp in BB_UP.items():
+    if place_bb(cp, fira_cmap[ord(ch)]):
+        extra += 1
+for i in range(26):                                      # bb lowercase U+1D552..
+    if place_bb(0x1D552 + i, fira_cmap[0x61 + i]):
+        extra += 1
+for i in range(10):                                      # bb digits U+1D7D8..
+    if place_bb(0x1D7D8 + i, fira_cmap[0x30 + i]):
         extra += 1
 
 fira.setGlyphOrder(_orig_order + _new_names)            # set order ONCE (all new glyphs)
