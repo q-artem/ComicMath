@@ -744,7 +744,9 @@ def stamp_prime(gname, n, scale=1.35):
             rec.replay(TransformPen(pen, (scale, 0, 0, scale,
                                           tcx - scale*qcx, qcy*(1-scale))))
     return emit_pathops(gname, df)
-for cp, n in [(0x2032,1),(0x2033,2),(0x2034,3)]:
+#   incl. plain apostrophe U+0027 and modifier prime U+02B9 — in math these are
+#   used as derivative marks too, so they must match the comma prime.
+for cp, n in [(0x2032,1),(0x2033,2),(0x2034,3),(0x0027,1),(0x02B9,1)]:
     g = cmap_g(cp)
     if g and stamp_prime(g, n):
         extra += 1
