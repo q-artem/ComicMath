@@ -32,6 +32,8 @@ fira = TTFont(BASE);    fira_cmap = fira.getBestCmap(); fira_gs = fira.getGlyphS
 ci   = TTFont(COMIC_I); ci_cmap = ci.getBestCmap();     ci_gs = ci.getGlyphSet()
 cr   = TTFont(COMIC_R); cr_cmap = cr.getBestCmap();     cr_gs = cr.getGlyphSet()
 gk   = TTFont(GREEK);   gk_cmap = gk.getBestCmap();     gk_gs = gk.getGlyphSet()
+crb  = TTFont("fonts/donor-ComicReliefBold.ttf")        # bold latin/greek/digits
+crb_cmap = crb.getBestCmap(); crb_gs = crb.getGlyphSet()
 pac  = TTFont("fonts/donor-Courgette.ttf")              # casual script -> calligraphic
 pac_cmap = pac.getBestCmap(); pac_gs = pac.getGlyphSet()
 _pnb = BoundsPen(pac_gs); pac_gs[pac_cmap[ord('N')]].draw(_pnb)   # OS/2 capheight is bogus
@@ -49,6 +51,8 @@ S_LOW = F_X   / ci["OS/2"].sxHeight        # Comic Neue lowercase -> Fira x-heig
 S_CAP = F_CAP / ci["OS/2"].sCapHeight      # Comic Neue uppercase/digits -> cap-height
 G_LOW = F_X   / gk["OS/2"].sxHeight        # Comic Relief greek lowercase
 G_CAP = F_CAP / gk["OS/2"].sCapHeight      # Comic Relief greek uppercase
+B_LOW = F_X   / crb["OS/2"].sxHeight       # Comic Relief Bold lowercase
+B_CAP = F_CAP / crb["OS/2"].sCapHeight     # Comic Relief Bold uppercase/digits
 SKEW  = math.tan(math.radians(12))         # match Comic Neue italic angle (-12)
 
 LOWER = "abcdefghijklmnopqrstuvwxyz"
@@ -90,6 +94,20 @@ for cp in range(0x0391, 0x03AA):
     if cp == 0x03A2:
         continue
     jobs.append((cp, cp, gk_cmap, gk_gs, G_CAP, 0))
+
+# --- Bold + Bold-italic (Comic Relief Bold; donor is upright -> shear italics) -
+for i in range(26):                                   # bold / bold-italic Latin
+    jobs.append((0x1D400 + i, 0x41 + i, crb_cmap, crb_gs, B_CAP, 0))
+    jobs.append((0x1D468 + i, 0x41 + i, crb_cmap, crb_gs, B_CAP, SKEW))
+    jobs.append((0x1D41A + i, 0x61 + i, crb_cmap, crb_gs, B_LOW, 0))
+    jobs.append((0x1D482 + i, 0x61 + i, crb_cmap, crb_gs, B_LOW, SKEW))
+for i in range(10):                                   # bold digits
+    jobs.append((0x1D7CE + i, 0x30 + i, crb_cmap, crb_gs, B_CAP, 0))
+for cp in range(0x0391, 0x03AA):                      # bold greek uppercase (upright)
+    if cp != 0x03A2:
+        jobs.append((0x1D6A8 + (cp - 0x391), cp, crb_cmap, crb_gs, B_CAP, 0))
+for cp in range(0x03B1, 0x03CA):                      # bold greek lowercase (upright)
+    jobs.append((0x1D6C2 + (cp - 0x3B1), cp, crb_cmap, crb_gs, B_LOW, 0))
 
 def hcenter(b):
     return (b[0] + b[2]) / 2 if b else 0
