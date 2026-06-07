@@ -154,11 +154,13 @@ def make_pointfunc(gname, s, skew, dx, cx, cy):
     return pf
 
 done = skip = 0
+grafted_letters = set()                              # for sidebearing normalisation below
 for tgt, src_cp, src_cmap, src_gs, s, skew in jobs:
     gname = fira_cmap.get(tgt)
     src   = src_cmap.get(src_cp)
     if gname is None or src is None or gname not in charstrs:
         skip += 1; continue
+    grafted_letters.add(gname)
 
     # horizontal centre of the original Fira glyph (preserve placement)
     ob = BoundsPen(fira_gs); fira_gs[gname].draw(ob)
@@ -178,28 +180,66 @@ for tgt, src_cp, src_cmap, src_gs, s, skew in jobs:
     charstrs[gname] = t2.getCharString(private=private)
     done += 1
 
-# --- thin the (chunky) digits so subscripts/indices don't look bold ----------
-DIGIT_ERODE = 13
-def erode_glyph(gname, d):
+# --- normalise sidebearings: comic outlines are wider than Fira's, so wide -----
+#     glyphs (esp. the sheared italic caps like I/J) overhang their advance box
+#     and collide with neighbours. Guarantee a minimum L/R sidebearing by
+#     shifting right + growing the advance. Only ever GROWS the box, so glyphs
+#     that already sit comfortably are left untouched.
+MIN_LSB = 40        # minimum left sidebearing  (em/1000)
+MIN_RSB = 40        # minimum right sidebearing
+def fit_sidebearings(gname, min_l=MIN_LSB, min_r=MIN_RSB):
     if gname not in charstrs:
+        return
+    cs = charstrs[gname]
+    bp = BoundsPen(None); cs.draw(bp)
+    if not bp.bounds:
+        return
+    xmin, _, xmax, _ = bp.bounds
+    aw = hmtx[gname][0]
+    shift  = max(0, min_l - xmin)                    # push right if ink overhangs left
+    new_xmax = xmax + shift
+    new_aw = max(aw, int(round(new_xmax + min_r)))   # grow advance for right clearance
+    if shift == 0 and new_aw == aw:
+        return                                       # already comfortable
+    pen = T2CharStringPen(new_aw, None)
+    cs.draw(TransformPen(pen, (1, 0, 0, 1, shift, 0)))
+    charstrs[gname] = pen.getCharString(private=private)
+    hmtx[gname] = (new_aw, int(round(xmin + shift)))
+
+sb_fixed = 0
+for gname in grafted_letters:
+    before = hmtx[gname][0]
+    fit_sidebearings(gname)
+    if hmtx[gname][0] != before:
+        sb_fixed += 1
+print(f"sidebearing-normalised {sb_fixed} wide glyphs (min L/R = {MIN_LSB}/{MIN_RSB})")
+
+# --- adjust digit stroke weight ----------------------------------------------
+#   d > 0  -> DILATE (thicker): stroke the contour and UNION it, growing the
+#            stroke ~2*d outward.  d < 0 -> erode (thinner) via DIFFERENCE.
+#   Digit comic stroke is ~75/1000em; DIGIT_WEIGHT=6 ≈ +15% thicker.
+DIGIT_WEIGHT = 6
+def reweight_glyph(gname, d):
+    if gname not in charstrs or d == 0:
         return
     src = pathops.Path(); charstrs[gname].draw(src.getPen())
     rib = pathops.Path(); charstrs[gname].draw(rib.getPen())
-    rib.stroke(2*d, pathops.LineCap.ROUND_CAP, pathops.LineJoin.ROUND_JOIN, 4)
+    rib.stroke(2*abs(d), pathops.LineCap.ROUND_CAP, pathops.LineJoin.ROUND_JOIN, 4)
     rib.convertConicsToQuads(0.5)
+    op = pathops.PathOp.UNION if d > 0 else pathops.PathOp.DIFFERENCE
     try:
-        res = pathops.op(src, rib, pathops.PathOp.DIFFERENCE, fix_winding=True)
+        res = pathops.op(src, rib, op, fix_winding=True)
     except pathops.PathOpsError:
         return
     res.convertConicsToQuads(0.5)
     w = hmtx[gname][0]
     t2 = T2CharStringPen(w, None); res.draw(Qu2CuPen(t2, max_err=0.6))
     charstrs[gname] = t2.getCharString(private=private, globalSubrs=gsubrs)
-if DIGIT_ERODE:
+if DIGIT_WEIGHT:
     for cp in range(0x30, 0x3A):                 # plain digits 0-9
         g = fira_cmap.get(cp)
         if g:
-            erode_glyph(g, DIGIT_ERODE)
+            reweight_glyph(g, DIGIT_WEIGHT)
 
 # --- Symbols (operators, relations, big operators) from Comic Relief ----------
 CR_STROKE   = 75.2 * gk["head"].unitsPerEm / 1000   # donor stroke in donor units (~154)
@@ -791,6 +831,74 @@ def _style(el, key):
             return part.split(':', 1)[1].strip()
     return None
 
+# Hand-drawn (Rnote) outlines carry ~1800 tessellation points per glyph; the
+# shape is already a dense polygon, so Ramer–Douglas–Peucker decimation cuts
+# that ~10x with no visible change. Applied to the final outline at emit time.
+BB_DECIMATE_EPS = 2.0           # max deviation (em/1000); 0 = keep all points
+def _rdp(pts, eps):
+    """Decimate a closed contour polyline, keeping points that deviate > eps."""
+    n = len(pts)
+    if n < 4:
+        return pts
+    P = pts + [pts[0]]                                   # treat as closed
+    # Seed a SECOND anchor (farthest point from start) so the initial segment
+    # isn't the degenerate start==end chord that would collapse the contour.
+    ax, ay = P[0]
+    far = max(range(1, n), key=lambda i: (P[i][0]-ax)**2 + (P[i][1]-ay)**2)
+    keep = [False] * len(P); keep[0] = keep[-1] = keep[far] = True
+    stack = [(0, far), (far, len(P) - 1)]
+    while stack:
+        a, b = stack.pop()
+        ax, ay = P[a]; bx, by = P[b]
+        dx, dy = bx - ax, by - ay
+        nrm = math.hypot(dx, dy) or 1.0
+        dmax, idx = 0.0, -1
+        for i in range(a + 1, b):
+            px, py = P[i]
+            d = abs((px - ax) * dy - (py - ay) * dx) / nrm
+            if d > dmax:
+                dmax, idx = d, i
+        if dmax > eps and idx != -1:
+            keep[idx] = True
+            stack.append((a, idx)); stack.append((idx, b))
+    R = [P[i] for i in range(len(P)) if keep[i]]
+    if R[-1] == R[0]:
+        R = R[:-1]
+    return R
+
+def _flatten(acc, steps=4):
+    """Flatten a pathops outline to per-contour straight-line polylines."""
+    rp = RecordingPen(); acc.draw(rp)
+    contours = []; cur = None; start = None
+    def quad(p0, c, p1):
+        for k in range(1, steps + 1):
+            t = k / steps; mt = 1 - t
+            cur.append((mt*mt*p0[0] + 2*mt*t*c[0] + t*t*p1[0],
+                        mt*mt*p0[1] + 2*mt*t*c[1] + t*t*p1[1]))
+    for op, args in rp.value:
+        if op == "moveTo":
+            cur = [args[0]]; start = args[0]
+        elif op == "lineTo":
+            cur.append(args[0])
+        elif op == "qCurveTo":                          # TrueType quad run (+implied on-curves)
+            offs = list(args)
+            last = offs[-1] if offs[-1] is not None else start
+            offs = offs[:-1]
+            p0 = cur[-1]
+            for i, c in enumerate(offs):
+                p1 = last if i == len(offs) - 1 else ((c[0]+offs[i+1][0])/2, (c[1]+offs[i+1][1])/2)
+                quad(p0, c, p1); p0 = p1
+        elif op == "curveTo":                           # cubic -> sample
+            p0 = cur[-1]; c1, c2, p1 = args
+            for k in range(1, steps + 1):
+                t = k / steps; mt = 1 - t
+                cur.append((mt**3*p0[0] + 3*mt*mt*t*c1[0] + 3*mt*t*t*c2[0] + t**3*p1[0],
+                            mt**3*p0[1] + 3*mt*mt*t*c1[1] + 3*mt*t*t*c2[1] + t**3*p1[1]))
+        elif op in ("closePath", "endPath"):
+            if cur: contours.append(cur); cur = None
+    if cur: contours.append(cur)
+    return contours
+
 def load_svg_glyph(svgpath, sb=40):
     """Accept both FILLED paths (Inkscape) and STROKED centreline paths (Rnote):
     a path with fill:none + stroke is stroked by its stroke-width; else filled."""
@@ -834,7 +942,17 @@ def load_svg_glyph(svgpath, sb=40):
     xmin, _, xmax, _ = acc.bounds
     dx = sb - xmin; adv = int(round((xmax - xmin) + 2*sb))
     t2 = T2CharStringPen(adv, None)
-    acc.draw(TransformPen(Qu2CuPen(t2, max_err=0.6), (1, 0, 0, 1, dx, 0)))
+    if BB_DECIMATE_EPS:                                  # prune tessellation points
+        for c in _flatten(acc):
+            c = _rdp(c, BB_DECIMATE_EPS)
+            if len(c) < 3:
+                continue
+            t2.moveTo((c[0][0] + dx, c[0][1]))
+            for x, y in c[1:]:
+                t2.lineTo((x + dx, y))
+            t2.closePath()
+    else:
+        acc.draw(TransformPen(Qu2CuPen(t2, max_err=0.6), (1, 0, 0, 1, dx, 0)))
     return t2.getCharString(private=private, globalSubrs=gsubrs), adv
 
 _svg_map = dict(BB_UP)                                    # 'A'..'Z' -> bb codepoint

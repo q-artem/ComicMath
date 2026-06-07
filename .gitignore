@@ -6,3 +6,7 @@ _phys/
 *.zip
 phys_sample.png
 вставленный файл.jpg
+
+# Rnote full-alphabet SVG export is a 6 MB intermediate (regenerate from the
+# .rnote master); the build reads the sliced svg/bb/*.svg, not this.
+sources/*.svg
