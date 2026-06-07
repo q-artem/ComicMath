@@ -594,6 +594,36 @@ for cp, fn in [(0x230A,d_lfloor),(0x230B,d_rfloor),(0x2308,d_lceil),(0x2309,d_rc
         if b and synth(g, fn(b)):
             extra += 1
 
+# --- horizontal stretchy over/under braces, brackets, parens ----------------
+_hv = dict(zip(mvar.HorizGlyphCoverage.glyphs, mvar.HorizGlyphConstruction)) \
+    if mvar.HorizGlyphCoverage else {}
+def horiz_variants(gname):
+    con = _hv.get(gname)
+    return [r.VariantGlyph for r in con.MathGlyphVariantRecord] if con else [gname]
+BW = 74
+def _hbrace(b, nib_up):
+    x0,y0,x1,y1=b; W=x1-x0; cx=(x0+x1)/2; r=BW/2
+    yt, yn = (y0+r, y1-r) if nib_up else (y1-r, y0+r)        # tips line / nib
+    pts=[(x0+r,yt),(x0+W*0.22,yt),(cx-W*0.10,(yt+yn)/2),(cx,yn),
+         (cx+W*0.10,(yt+yn)/2),(x1-W*0.22,yt),(x1-r,yt)]
+    return _poly(_catmull(pts,8),BW)
+def hb_overbrace(b):    return _hbrace(b, True)
+def hb_underbrace(b):   return _hbrace(b, False)
+def hb_overbracket(b):  x0,y0,x1,y1=b; r=BW/2; return _poly([(x0+r,y0),(x0+r,y1-r),(x1-r,y1-r),(x1-r,y0)],BW)
+def hb_underbracket(b): x0,y0,x1,y1=b; r=BW/2; return _poly([(x0+r,y1),(x0+r,y0+r),(x1-r,y0+r),(x1-r,y1)],BW)
+def hb_overparen(b):    x0,y0,x1,y1=b; r=BW/2; cx=(x0+x1)/2; return _poly(_catmull([(x0+r,y0+r),(cx,y1-r),(x1-r,y0+r)],10),BW)
+def hb_underparen(b):   x0,y0,x1,y1=b; r=BW/2; cx=(x0+x1)/2; return _poly(_catmull([(x0+r,y1-r),(cx,y0+r),(x1-r,y1-r)],10),BW)
+
+for cp, fn in [(0x23DE,hb_overbrace),(0x23DF,hb_underbrace),(0x23B4,hb_overbracket),
+               (0x23B5,hb_underbracket),(0x23DC,hb_overparen),(0x23DD,hb_underparen)]:
+    g0 = cmap_g(cp)
+    if not g0:
+        continue
+    for g in horiz_variants(g0):
+        b = box_of(g)
+        if b and synth(g, fn(b)):
+            extra += 1
+
 # --- blackboard bold numbers ℕ ℤ ℚ ℝ ℂ ℙ ℍ (hand-drawn double-struck) --------
 BBW, BBG = 44, 84   # blackboard stroke + doubling gap
 def _off(p, q, d):
