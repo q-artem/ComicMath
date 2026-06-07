@@ -624,6 +624,29 @@ for cp, fn in [(0x23DE,hb_overbrace),(0x23DF,hb_underbrace),(0x23B4,hb_overbrack
         if b and synth(g, fn(b)):
             extra += 1
 
+# --- math accents (hat/tilde/bar/vec/dot/ddot/check/breve/acute/grave/ring) --
+AW = 74
+def ac_hat(b):   x0,y0,x1,y1=b; r=AW/2; return _poly([(x0+r,y0+r),((x0+x1)/2,y1-r),(x1-r,y0+r)],AW)
+def ac_check(b): x0,y0,x1,y1=b; r=AW/2; return _poly([(x0+r,y1-r),((x0+x1)/2,y0+r),(x1-r,y1-r)],AW)
+def ac_bar(b):   x0,y0,x1,y1=b; r=AW/2; cy=(y0+y1)/2; return _poly([(x0+r,cy),(x1-r,cy)],AW)
+def ac_tilde(b): x0,y0,x1,y1=b; r=AW/2; cy=(y0+y1)/2; return _poly(_wave(x0+r,x1-r,cy,(y1-y0)*0.30),AW)
+def ac_dot(b):   x0,y0,x1,y1=b; return [_disc((x0+x1)/2,(y0+y1)/2,AW*0.62)]
+def ac_ddot(b):  x0,y0,x1,y1=b; cy=(y0+y1)/2; g=(x1-x0)*0.26; cx=(x0+x1)/2; return [_disc(cx-g,cy,AW*0.55),_disc(cx+g,cy,AW*0.55)]
+def ac_breve(b): x0,y0,x1,y1=b; r=AW/2; cx=(x0+x1)/2; return _poly(_catmull([(x0+r,y1-r),(cx,y0+r),(x1-r,y1-r)],8),AW)
+def ac_ring(b):  x0,y0,x1,y1=b; cx,cy=(x0+x1)/2,(y0+y1)/2; return _ring(cx,cy,min(x1-x0,y1-y0)/2-AW*0.4,AW*0.62,n=22)
+def ac_acute(b): x0,y0,x1,y1=b; r=AW/2; return _poly([(x0+r,y0+r),(x1-r,y1-r)],AW)
+def ac_grave(b): x0,y0,x1,y1=b; r=AW/2; return _poly([(x0+r,y1-r),(x1-r,y0+r)],AW)
+def ac_vec(b):
+    x0,y0,x1,y1=b; r=AW/2; cy=(y0+y1)/2; hl=(x1-x0)*0.42; sp=hl*0.6
+    return _poly([(x0+r,cy),(x1-r,cy)],AW)+_poly([(x1-r-hl,cy+sp),(x1-r,cy),(x1-r-hl,cy-sp)],AW)
+
+for cp, fn in [(0x0302,ac_hat),(0x030C,ac_check),(0x0304,ac_bar),(0x0305,ac_bar),
+               (0x0303,ac_tilde),(0x0307,ac_dot),(0x0308,ac_ddot),(0x0306,ac_breve),
+               (0x030A,ac_ring),(0x0301,ac_acute),(0x0300,ac_grave),(0x20D7,ac_vec)]:
+    g = cmap_g(cp)
+    if g and shape(g, fn):
+        extra += 1
+
 # --- blackboard bold numbers ℕ ℤ ℚ ℝ ℂ ℙ ℍ (hand-drawn double-struck) --------
 BBW, BBG = 44, 84   # blackboard stroke + doubling gap
 def _off(p, q, d):
