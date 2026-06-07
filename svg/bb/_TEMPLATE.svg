@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 1000">
+  <!-- ============================================================
+       ШАБЛОН для blackboard-буквы (double-struck).
+       Рисуй СВОЮ букву как залитый чёрный <path> (можно несколько).
+       Направляющие ниже — это <line>/<text>, импортёр их ИГНОРИРУЕТ
+       (берёт только <path>). Можешь оставить их в файле.
+
+       Координаты (важно по вертикали):
+         baseline  = y 800   (низ буквы стоит здесь)
+         cap line  = y 111   (верх ЗАГЛАВНОЙ буквы)
+         x-height  = y 330   (верх строчной)
+         descender = y 900   (хвосты Q/g ниже базовой)
+       По ширине — рисуй как удобно; отступы и advance подберутся сами.
+       Сохрани как <БУКВА>.svg в эту папку (N.svg, Z.svg, Q.svg, R.svg, C.svg,
+       строчные a.svg.., цифры 0.svg..). Заглавные = латинская буква.
+       ============================================================ -->
+
+  <!-- guides (ignored by importer) -->
+  <line x1="0" y1="800" x2="700" y2="800" stroke="#e23" stroke-width="2"/>
+  <line x1="0" y1="111" x2="700" y2="111" stroke="#28d" stroke-width="2"/>
+  <line x1="0" y1="330" x2="700" y2="330" stroke="#2a6" stroke-width="1.5" stroke-dasharray="6 6"/>
+  <line x1="0" y1="900" x2="700" y2="900" stroke="#999" stroke-width="1.5" stroke-dasharray="6 6"/>
+  <text x="6" y="795" font-size="22" fill="#e23">baseline</text>
+  <text x="6" y="106" font-size="22" fill="#28d">cap</text>
+  <text x="6" y="325" font-size="20" fill="#2a6">x-height</text>
+  <text x="6" y="895" font-size="20" fill="#999">descender</text>
+
+  <!-- example double-struck N (replace with your letter; delete this path) -->
+  <path d="M150 800 L150 111 L190 111 L190 800 Z
+           M210 111 L250 111 L470 690 L470 111 L510 111 L510 800 L470 800 L250 220 L250 800 L210 800 Z"
+        fill="#ccc"/>
+</svg>

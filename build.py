@@ -8,8 +8,10 @@ horizontal centre of the original Fira glyph it replaces, so math spacing and
 MATH-table metadata stay valid. Greek is sourced upright from Comic Relief and
 sheared 12 deg for the italic math slots (matching Comic Neue's italic angle).
 """
-import math, sys, random
+import math, sys, random, os
+import xml.etree.ElementTree as ET
 import pathops
+from fontTools.svgLib.path import parse_path
 from fontTools.ttLib import TTFont
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.pens.qu2cuPen import Qu2CuPen
@@ -779,6 +781,47 @@ for i in range(26):                                      # bb lowercase U+1D552.
 for i in range(10):                                      # bb digits U+1D7D8..
     if place_bb(0x1D7D8 + i, fira_cmap[0x30 + i]):
         extra += 1
+
+# --- hand-drawn SVG override for blackboard (svg/bb/<NAME>.svg) --------------
+# Convention: viewBox height 1000, BASELINE at y=800, cap line at y=111 (cap 689),
+# descender to ~y=900. Any width; advance auto-fit with sidebearings. y flips.
+SVG_BASELINE = 800
+def load_svg_glyph(svgpath, sb=40):
+    root = ET.parse(svgpath).getroot()
+    paths = root.findall('.//{http://www.w3.org/2000/svg}path') or root.findall('.//path')
+    rec = RecordingPen()
+    for pth in paths:
+        d = pth.get('d')
+        if d:
+            parse_path(d, rec)
+    bp = BoundsPen({}); rec.replay(TransformPen(bp, (1, 0, 0, -1, 0, SVG_BASELINE)))
+    if not bp.bounds:
+        return None
+    xmin, _, xmax, _ = bp.bounds
+    dx = sb - xmin; adv = int(round((xmax - xmin) + 2*sb))
+    pp = pathops.Path()
+    rec.replay(TransformPen(pp.getPen(), (1, 0, 0, -1, dx, SVG_BASELINE)))
+    pp = pathops.simplify(pp, fix_winding=True)
+    t2 = T2CharStringPen(adv, None); pp.draw(Qu2CuPen(t2, max_err=0.6))
+    return t2.getCharString(private=private, globalSubrs=gsubrs), adv
+
+_svg_map = dict(BB_UP)                                    # 'A'..'Z' -> bb codepoint
+_svg_map.update({chr(0x61+i): 0x1D552+i for i in range(26)})   # lowercase 'a'..'z'
+_svg_map.update({str(i): 0x1D7D8+i for i in range(10)})        # digits '0'..'9'
+for fn, cp in _svg_map.items():
+    pth = os.path.join("svg", "bb", fn + ".svg")
+    if not os.path.exists(pth):
+        continue
+    out = load_svg_glyph(pth)
+    if not out:
+        continue
+    cs, adv = out
+    name = next((t.cmap[cp] for t in fira["cmap"].tables if cp in t.cmap), None)
+    if name and name in charstrs:
+        charstrs[name] = cs; hmtx.metrics[name] = (adv, 0)
+    else:
+        nm = "cm_bb_%04X" % cp; add_glyph(nm, cs, adv); add_cmap(cp, nm)
+    print(f"  SVG override: {fn} -> U+{cp:04X}")
 
 # --- fraktur (new glyphs from UnifrakturCook, blackletter donor) -------------
 frk = TTFont("fonts/donor-UnifrakturCook-Bold.ttf")
