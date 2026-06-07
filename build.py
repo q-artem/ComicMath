@@ -657,11 +657,16 @@ SCRIPT_UP = {'A':0x1D49C,'B':0x212C,'C':0x1D49E,'D':0x1D49F,'E':0x2130,'F':0x213
              'M':0x2133,'N':0x1D4A9,'O':0x1D4AA,'P':0x1D4AB,'Q':0x1D4AC,'R':0x211B,
              'S':0x1D4AE,'T':0x1D4AF,'U':0x1D4B0,'V':0x1D4B1,'W':0x1D4B2,'X':0x1D4B3,
              'Y':0x1D4B4,'Z':0x1D4B5}
-S_CAL = F_CAP / PAC_CAP
-for ch, cp in SCRIPT_UP.items():
+SCRIPT_LOW = {'a':0x1D4B6,'b':0x1D4B7,'c':0x1D4B8,'d':0x1D4B9,'e':0x212F,'f':0x1D4BB,
+              'g':0x210A,'h':0x1D4BD,'i':0x1D4BE,'j':0x1D4BF,'k':0x1D4C0,'l':0x1D4C1,
+              'm':0x1D4C2,'n':0x1D4C3,'o':0x2134,'p':0x1D4C5,'q':0x1D4C6,'r':0x1D4C7,
+              's':0x1D4C8,'t':0x1D4C9,'u':0x1D4CA,'v':0x1D4CB,'w':0x1D4CC,'x':0x1D4CD,
+              'y':0x1D4CE,'z':0x1D4CF}
+S_CAL = F_CAP / PAC_CAP                                  # uniform (keeps script proportions)
+def add_cal(ch, cp):
     src = pac_cmap.get(ord(ch))
     if src is None:
-        continue
+        return False
     rec = DecomposingRecordingPen(pac_gs); pac_gs[src].draw(rec)
     adv = pac["hmtx"][src][0] * S_CAL
     t2 = T2CharStringPen(adv, None)
@@ -670,7 +675,10 @@ for ch, cp in SCRIPT_UP.items():
     name = "cm_cal_%04X" % cp
     add_glyph(name, t2.getCharString(private=private, globalSubrs=gsubrs), adv)
     add_cmap(cp, name)
-    extra += 1
+    return True
+for ch, cp in {**SCRIPT_UP, **SCRIPT_LOW}.items():
+    if add_cal(ch, cp):
+        extra += 1
 
 fira.setGlyphOrder(_orig_order + _new_names)            # set order ONCE (all new glyphs)
 fira["maxp"].numGlyphs = len(_orig_order) + len(_new_names)
