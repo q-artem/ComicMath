@@ -1,0 +1,12 @@
+#set page(width: 22cm, height: auto, margin: 1cm, fill: white)
+#set text(font: "Comic Neue", size: 13pt, weight: "bold")
+#show math.equation: set text(font: "Comic Math Relief", size: 26pt)
+#set par(leading: 10pt)
+#let row(t, body) = { text(size:12pt)[#t]; v(1pt); body; v(7pt) }
+#row("Flips: ∇ ∀ ∃ ∐", $ nabla quad forall x quad exists y quad product.co_i $)
+#row("Стрелки", $ arrow.l arrow.r arrow.l.r arrow.r.double arrow.l.r.double arrow.r.bar arrow.t arrow.b arrow.t.b $)
+#row("Множества/логика", $ A union B quad A sect B quad p or q quad p and q quad A subset B quad A supset.eq B $)
+#row("Отношения", $ a tilde b quad a equiv b quad a tilde.eq b quad a prop b $)
+#row("Кружки: ⊕ ⊗ ⊙ ⊖ ⊘ ∅", $ a plus.circle b quad a times.circle b quad dot.circle quad minus.circle quad nothing $)
+#row("Точки/прочее", $ a dot.op b quad 1 + dots.c + n quad f compose g quad a ast b quad ell quad x' $)
+#row("Разделители", $ floor(x/2) quad ceil(a/b) quad angle.l v, w angle.r quad norm(x) $)

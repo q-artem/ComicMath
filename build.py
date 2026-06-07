@@ -1,0 +1,680 @@
+#!/usr/bin/env python3
+"""ComicMath: graft Comic Neue (Latin) + Comic Relief (Greek) letterforms into
+Fira Math.
+
+Keeps Fira's MATH table, symbols, delimiters and per-glyph advance widths.
+Every replaced glyph is scaled to Fira's x-/cap-height and re-centred on the
+horizontal centre of the original Fira glyph it replaces, so math spacing and
+MATH-table metadata stay valid. Greek is sourced upright from Comic Relief and
+sheared 12 deg for the italic math slots (matching Comic Neue's italic angle).
+"""
+import math, sys, random
+import pathops
+from fontTools.ttLib import TTFont
+from fontTools.pens.t2CharStringPen import T2CharStringPen
+from fontTools.pens.qu2cuPen import Qu2CuPen
+from fontTools.pens.transformPen import TransformPen
+from fontTools.pens.recordingPen import DecomposingRecordingPen, RecordingPen
+from fontTools.pens.boundsPen import BoundsPen
+
+BASE    = "fonts/FiraMath-Regular.otf"
+COMIC_I = "fonts/ComicNeue-Italic.ttf"     # Latin math variables (already slanted)
+COMIC_R = "fonts/ComicNeue-Regular.ttf"    # Latin digits + upright
+GREEK   = "fonts/donor-ComicRelief.ttf"    # Greek (comic style), upright
+# argv[1] = wobble strength (0 = clean). argv[2] = latin donor: "neue" | "relief"
+WOBBLE  = float(sys.argv[1]) if len(sys.argv) > 1 else 0.0
+LATIN   = sys.argv[2] if len(sys.argv) > 2 else "neue"
+_parts  = ["Comic Math"] + (["Relief"] if LATIN == "relief" else []) + (["Wobble"] if WOBBLE else [])
+FAMILY  = " ".join(_parts)
+OUT     = "fonts/" + FAMILY.replace(" ", "") + ".otf" if len(_parts) > 1 else "fonts/ComicMath-Regular.otf"
+
+fira = TTFont(BASE);    fira_cmap = fira.getBestCmap(); fira_gs = fira.getGlyphSet()
+ci   = TTFont(COMIC_I); ci_cmap = ci.getBestCmap();     ci_gs = ci.getGlyphSet()
+cr   = TTFont(COMIC_R); cr_cmap = cr.getBestCmap();     cr_gs = cr.getGlyphSet()
+gk   = TTFont(GREEK);   gk_cmap = gk.getBestCmap();     gk_gs = gk.getGlyphSet()
+pac  = TTFont("fonts/donor-Courgette.ttf")              # casual script -> calligraphic
+pac_cmap = pac.getBestCmap(); pac_gs = pac.getGlyphSet()
+_pnb = BoundsPen(pac_gs); pac_gs[pac_cmap[ord('N')]].draw(_pnb)   # OS/2 capheight is bogus
+PAC_CAP = _pnb.bounds[3] - _pnb.bounds[1]              # measure real cap height
+
+cff      = fira["CFF "].cff
+top      = cff[cff.fontNames[0]]
+charstrs = top.CharStrings
+private  = top.Private
+gsubrs   = cff.GlobalSubrs
+hmtx     = fira["hmtx"]
+
+F_X, F_CAP = fira["OS/2"].sxHeight, fira["OS/2"].sCapHeight
+S_LOW = F_X   / ci["OS/2"].sxHeight        # Comic Neue lowercase -> Fira x-height
+S_CAP = F_CAP / ci["OS/2"].sCapHeight      # Comic Neue uppercase/digits -> cap-height
+G_LOW = F_X   / gk["OS/2"].sxHeight        # Comic Relief greek lowercase
+G_CAP = F_CAP / gk["OS/2"].sCapHeight      # Comic Relief greek uppercase
+SKEW  = math.tan(math.radians(12))         # match Comic Neue italic angle (-12)
+
+LOWER = "abcdefghijklmnopqrstuvwxyz"
+UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# jobs: (target_cp_in_fira, source_cp, source_cmap, source_glyphset, scale, skew)
+jobs = []
+
+# --- Latin -------------------------------------------------------------------
+if LATIN == "relief":
+    # all latin from Comic Relief (upright donor): shear italic slots like greek
+    IT_CMAP, IT_GS, UP_CMAP, UP_GS = gk_cmap, gk_gs, gk_cmap, gk_gs
+    L_LOW, L_CAP, IT_SKEW = G_LOW, G_CAP, SKEW
+else:
+    # Comic Neue: Italic donor for italic slots (pre-slanted), Regular for upright
+    IT_CMAP, IT_GS, UP_CMAP, UP_GS = ci_cmap, ci_gs, cr_cmap, cr_gs
+    L_LOW, L_CAP, IT_SKEW = S_LOW, S_CAP, 0
+
+for i, ch in enumerate(LOWER):                       # math italic lowercase
+    tgt = 0x210E if ch == "h" else 0x1D44E + i       # h -> PLANCK
+    jobs.append((tgt, ord(ch), IT_CMAP, IT_GS, L_LOW, IT_SKEW))
+for i, ch in enumerate(UPPER):                       # math italic uppercase
+    jobs.append((0x1D434 + i, ord(ch), IT_CMAP, IT_GS, L_CAP, IT_SKEW))
+for i in range(10):                                  # digits (upright)
+    jobs.append((0x30 + i, ord(str(i)), UP_CMAP, UP_GS, L_CAP, 0))
+for ch in LOWER:                                     # ascii upright lowercase
+    jobs.append((ord(ch), ord(ch), UP_CMAP, UP_GS, L_LOW, 0))
+for ch in UPPER:                                     # ascii upright uppercase
+    jobs.append((ord(ch), ord(ch), UP_CMAP, UP_GS, L_CAP, 0))
+
+# --- Greek (Comic Relief, upright donor) -------------------------------------
+# lowercase 0x03B1..0x03C9 maps 1:1 (incl. final sigma) to italic block 0x1D6FC..
+for i in range(25):
+    plain = 0x03B1 + i
+    jobs.append((0x1D6FC + i, plain, gk_cmap, gk_gs, G_LOW, SKEW))  # italic slot (default)
+    jobs.append((plain,        plain, gk_cmap, gk_gs, G_LOW, 0))    # upright slot
+# uppercase upright (math default); skip reserved 0x03A2
+for cp in range(0x0391, 0x03AA):
+    if cp == 0x03A2:
+        continue
+    jobs.append((cp, cp, gk_cmap, gk_gs, G_CAP, 0))
+
+def hcenter(b):
+    return (b[0] + b[2]) / 2 if b else 0
+
+def replay_mapped(recording, pf, outpen):
+    """Replay a recorded outline, passing every point through pf(x,y)->(x,y)."""
+    for op, args in recording:
+        if op == "moveTo":   outpen.moveTo(pf(*args[0]))
+        elif op == "lineTo": outpen.lineTo(pf(*args[0]))
+        elif op == "qCurveTo":
+            outpen.qCurveTo(*[pf(*p) if p is not None else None for p in args])
+        elif op == "curveTo":
+            outpen.curveTo(*[pf(*p) for p in args])
+        elif op == "closePath": outpen.closePath()
+        elif op == "endPath":   outpen.endPath()
+
+def make_pointfunc(gname, s, skew, dx, cx, cy):
+    """affine (scale+shear+shift) -> tiny rotation -> domain warp (hand-drawn)."""
+    if not WOBBLE:
+        return lambda x, y: (s * x + skew * s * y + dx, s * y)
+    rng = random.Random(gname)               # deterministic per glyph
+    px1, py1 = rng.uniform(0, 6.283), rng.uniform(0, 6.283)
+    px2, py2 = rng.uniform(0, 6.283), rng.uniform(0, 6.283)
+    ang = math.radians(rng.uniform(-1.3, 1.3)) * WOBBLE
+    ca, sa = math.cos(ang), math.sin(ang)
+    A  = 9.0 * WOBBLE                         # warp amplitude (em=1000)
+    W1 = 2 * math.pi / 175.0                  # primary wavelength
+    W2 = 2 * math.pi / 76.0                   # finer octave
+    def pf(x, y):
+        ax = s * x + skew * s * y + dx; ay = s * y          # affine
+        rx = cx + (ax - cx) * ca - (ay - cy) * sa           # rotate about centre
+        ry = cy + (ax - cx) * sa + (ay - cy) * ca
+        wx = rx + A * math.sin(W1 * ry + px1) + 0.45 * A * math.sin(W2 * ry + px2)
+        wy = ry + A * math.sin(W1 * rx + py1) + 0.45 * A * math.sin(W2 * rx + py2)
+        return (wx, wy)
+    return pf
+
+done = skip = 0
+for tgt, src_cp, src_cmap, src_gs, s, skew in jobs:
+    gname = fira_cmap.get(tgt)
+    src   = src_cmap.get(src_cp)
+    if gname is None or src is None or gname not in charstrs:
+        skip += 1; continue
+
+    # horizontal centre of the original Fira glyph (preserve placement)
+    ob = BoundsPen(fira_gs); fira_gs[gname].draw(ob)
+    ocx = hcenter(ob.bounds)
+
+    rec = DecomposingRecordingPen(src_gs); src_gs[src].draw(rec)
+
+    # measure source after scale+shear (dx=0) to align centres
+    mb = BoundsPen(src_gs); rec.replay(TransformPen(mb, (s, 0, skew * s, s, 0, 0)))
+    dx = ocx - hcenter(mb.bounds)
+    cy = (mb.bounds[1] + mb.bounds[3]) / 2 if mb.bounds else 0
+
+    width = hmtx[gname][0]                            # keep Fira's advance width
+    t2 = T2CharStringPen(width, src_gs)
+    pf = make_pointfunc(gname, s, skew, dx, ocx, cy)
+    replay_mapped(rec.value, pf, Qu2CuPen(t2, max_err=0.6, reverse_direction=True))
+    charstrs[gname] = t2.getCharString(private=private)
+    done += 1
+
+# --- Symbols (operators, relations, big operators) from Comic Relief ----------
+CR_STROKE   = 75.2 * gk["head"].unitsPerEm / 1000   # donor stroke in donor units (~154)
+STROKE_MAX  = 96                                     # target symbol stroke (20% thinner)
+STROKE_CAP  = STROKE_MAX / CR_STROKE                 # horizontal scale that yields it (~0.62)
+SIZE_CAP    = 0.78                                   # vertical scale cap for big operators
+
+def graft_symbol(gname, donor_cp, stroke_cap=False, size_cap=None):
+    """Fit a Comic Relief symbol into the bbox of a Fira glyph, keeping Fira's
+    advance width. Non-uniform: x-scale capped to hold a constant stroke weight,
+    y-scale free (to reach height) so big variants don't balloon in thickness."""
+    if gname not in charstrs:
+        return False
+    src = gk_cmap.get(donor_cp)
+    if src is None:
+        return False
+    ob = BoundsPen(fira_gs); fira_gs[gname].draw(ob)
+    if not ob.bounds:
+        return False
+    oxmin, oymin, oxmax, oymax = ob.bounds
+    rec = DecomposingRecordingPen(gk_gs); gk_gs[src].draw(rec)
+    db = BoundsPen(gk_gs); rec.replay(db)
+    if not db.bounds:
+        return False
+    dxmin, dymin, dxmax, dymax = db.bounds
+    dh = dymax - dymin
+    if dh <= 0:
+        return False
+    s_h = (oymax - oymin) / dh                                   # height-fit scale
+    sx = min(s_h, STROKE_CAP) if stroke_cap else s_h             # constant stroke weight
+    sy = min(s_h, size_cap) if size_cap else s_h                 # height (capped for big ops)
+    tx = (oxmin + oxmax) / 2 - sx * (dxmin + dxmax) / 2          # centre x
+    ty = (oymin + oymax) / 2 - sy * (dymin + dymax) / 2          # centre y
+    t2 = T2CharStringPen(hmtx[gname][0], gk_gs)
+    rec.replay(TransformPen(Qu2CuPen(t2, max_err=0.6, reverse_direction=True),
+                            (sx, 0, 0, sy, tx, ty)))
+    charstrs[gname] = t2.getCharString(private=private)
+    return True
+
+# single-glyph operators / relations (skipped silently if donor lacks the cp)
+SIMPLE = [0x2202, 0x221E, 0x00B1, 0x00D7, 0x00F7, 0x2212, 0x002B, 0x003D,
+          0x2260, 0x2264, 0x2265, 0x2248, 0x2192, 0x21D2, 0x2208,
+          0x2219, 0x003C, 0x003E, 0x00AC, 0x2113, 0x2032, 0x2026]  # bullet < > neg ell prime ldots
+# big operators: each maps to its inline + .display variant glyph names
+BIG = {0x2211: ["uni2211", "uni2211.display"],
+       0x220F: ["uni220F", "uni220F.display"],
+       0x222B: ["uni222B", "uni222B.display"]}
+# radical: drawn procedurally in a comic stroke with a FLAT top arm (thickness =
+# RadicalRuleThickness) so it merges with the engine vinculum at any size. Only the
+# straight rise lengthens between sizes — the foot and arm stay fixed.
+RAD_W = 96   # comic radical stroke weight (also the rule thickness)
+COMIC_RADICAL = ["uni221A"] + [f"uni221A.size{i}" for i in range(1, 16)]
+
+def _cw(pts):
+    a = sum(pts[i][0]*pts[(i+1) % len(pts)][1] - pts[(i+1) % len(pts)][0]*pts[i][1]
+            for i in range(len(pts)))
+    return pts[::-1] if a > 0 else pts            # force clockwise (area < 0)
+
+def _seg(ax, ay, bx, by, w):
+    dx, dy = bx-ax, by-ay
+    L = math.hypot(dx, dy)
+    if L == 0:
+        return None
+    nx, ny = -dy/L*w/2, dx/L*w/2
+    return _cw([(ax+nx, ay+ny), (bx+nx, by+ny), (bx-nx, by-ny), (ax-nx, ay-ny)])
+
+def _disc(cx, cy, r, n=16):
+    return _cw([(cx+r*math.cos(2*math.pi*i/n), cy+r*math.sin(2*math.pi*i/n))
+                for i in range(n)])
+
+def _catmull(pts, n=12):
+    """Sample a Catmull-Rom spline through pts (with reflected end tangents)."""
+    P = [(2*pts[0][0]-pts[1][0], 2*pts[0][1]-pts[1][1])] + list(pts) + \
+        [(2*pts[-1][0]-pts[-2][0], 2*pts[-1][1]-pts[-2][1])]
+    out = []
+    for i in range(1, len(P)-2):
+        p0, p1, p2, p3 = P[i-1], P[i], P[i+1], P[i+2]
+        for s in range(n):
+            t = s/n; t2 = t*t; t3 = t2*t
+            x = 0.5*((2*p1[0]) + (-p0[0]+p2[0])*t +
+                     (2*p0[0]-5*p1[0]+4*p2[0]-p3[0])*t2 +
+                     (-p0[0]+3*p1[0]-3*p2[0]+p3[0])*t3)
+            y = 0.5*((2*p1[1]) + (-p0[1]+p2[1])*t +
+                     (2*p0[1]-5*p1[1]+4*p2[1]-p3[1])*t2 +
+                     (-p0[1]+3*p1[1]-3*p2[1]+p3[1])*t3)
+            out.append((x, y))
+    out.append(pts[-1])
+    return out
+
+def _emit(pen, contours):
+    for ct in contours:
+        if not ct:
+            continue
+        pen.moveTo(ct[0])
+        for p in ct[1:]:
+            pen.lineTo(p)
+        pen.closePath()
+
+def emit_pathops(gname, draw_fn):
+    """Run draw_fn(pen) into a Skia path, union/clean it, store as the glyph
+    (keeps Fira's advance width). Lets composite shapes overlap freely."""
+    if gname not in charstrs:
+        return False
+    p = pathops.Path()
+    draw_fn(p.getPen())
+    p = pathops.simplify(p, fix_winding=True)
+    t2 = T2CharStringPen(hmtx[gname][0], None)
+    p.draw(t2)
+    charstrs[gname] = t2.getCharString(private=private)
+    return True
+
+def _ring(cx, cy, R, th, n=44):
+    pts = [(cx + R*math.cos(2*math.pi*i/n), cy + R*math.sin(2*math.pi*i/n)) for i in range(n)]
+    pts.append(pts[0])
+    cs  = [_seg(*pts[i], *pts[i+1], th) for i in range(len(pts)-1)]
+    cs += [_disc(*p, th/2, 10) for p in pts[:-1]]
+    return cs
+
+def draw_comic_radical(gname, w):
+    if gname not in charstrs:
+        return False
+    ob = BoundsPen(fira_gs); fira_gs[gname].draw(ob)
+    if not ob.bounds:
+        return False
+    x0, y0, x1, y1 = ob.bounds
+    W  = hmtx[gname][0]
+    Wd = W - x0
+    H  = y1 - y0
+    top = y1 - w/2                                  # arm centreline (top edge at y1)
+    # control points: small rounded foot -> bottom -> rise -> peak -> arm -> flat end
+    ctrl = [(x0 + 0.14*Wd, y0 + 0.24*H),           # flag tip (short, rounded foot)
+            (x0 + 0.27*Wd, y0 + 0.05*H + 0.3*w),   # rounded bottom
+            (x0 + 0.46*Wd, top - 0.05*H),          # lower rise (gentle bow)
+            (x0 + 0.53*Wd, top),                   # peak / start of arm
+            (x0 + 0.70*Wd, top),                   # arm (horizontal tangent)
+            (W, top)]                              # arm end -> flat butt at vinculum
+    center = _catmull(ctrl, n=14)                   # smooth dense centreline
+    center = [(x, min(y, top)) for x, y in center]  # clamp out spline overshoot above arm
+    contours  = [_seg(*center[i], *center[i+1], w) for i in range(len(center)-1)]
+    contours += [_disc(*p, w/2) for p in center[:-1]]   # round profile + round foot cap
+    return emit_pathops(gname, lambda pen: _emit(pen, contours))
+
+def graft_multi_integral(gname, n, contour=False, w=96):
+    """Build ∬ ∮ ∭ from comic ∫ copies (+ ring for contour integrals)."""
+    if gname not in charstrs:
+        return False
+    src = gk_cmap.get(0x222B)
+    if src is None:
+        return False
+    ob = BoundsPen(fira_gs); fira_gs[gname].draw(ob)
+    if not ob.bounds:
+        return False
+    x0, y0, x1, y1 = ob.bounds
+    rec = DecomposingRecordingPen(gk_gs); gk_gs[src].draw(rec)
+    db = BoundsPen(gk_gs); rec.replay(db)
+    dx0, dy0, dx1, dy1 = db.bounds
+    sy = (y1 - y0) / (dy1 - dy0)
+    sx = min(sy, STROKE_CAP)
+    single = (dx1 - dx0) * sx
+    step = single * 0.72
+    cx0  = (x0 + x1)/2 - (single + (n-1)*step)/2 + single/2
+    ty   = (y0 + y1)/2 - sy*(dy0 + dy1)/2
+    def df(pen):
+        for i in range(n):
+            tx = cx0 + i*step - sx*(dx0 + dx1)/2
+            rec.replay(TransformPen(Qu2CuPen(pen, max_err=0.6, reverse_direction=True),
+                                    (sx, 0, 0, sy, tx, ty)))
+        if contour:                                  # small ring on the integral stem
+            _emit(pen, _ring(cx0, (y0 + y1)/2, 0.17*(y1 - y0), w*0.85))
+    return emit_pathops(gname, df)
+
+RADICAL = (0x221A, [])   # handled by draw_comic_radical below
+
+sym_done = 0
+for cp in SIMPLE:
+    g = fira_cmap.get(cp)
+    if g and graft_symbol(g, cp):                                 # small ops: uniform
+        sym_done += 1
+for cp, names in BIG.items():
+    for g in names:
+        if graft_symbol(g, cp, stroke_cap=True, size_cap=SIZE_CAP):  # thin + sized
+            sym_done += 1
+rad_done = sum(draw_comic_radical(g, RAD_W) for g in COMIC_RADICAL)   # procedural comic √
+sym_done += rad_done
+
+# double/triple/contour integrals synthesised from comic ∫ (Comic Relief lacks them)
+MULTI = {"uni222C": 2, "uni222C.display": 2,        # ∬
+         "uni222D": 3, "uni222D.display": 3,        # ∭
+         "uni222E": (1, True), "uni222E.display": (1, True)}  # ∮ (with ring)
+for g, spec in MULTI.items():
+    n, ring = (spec, False) if isinstance(spec, int) else spec
+    if graft_multi_integral(g, n, contour=ring, w=RAD_W):
+        sym_done += 1
+
+# delimiters: ( ) [ ] { } | from Comic Relief — base + discrete size variants,
+# stretched at constant stroke. Extensible assembly (very tall) stays Fira.
+mvar = fira["MATH"].table.MathVariants
+_vv = dict(zip(mvar.VertGlyphCoverage.glyphs, mvar.VertGlyphConstruction)) \
+    if mvar.VertGlyphCoverage else {}
+def vert_variants(gname):
+    con = _vv.get(gname)
+    return [r.VariantGlyph for r in con.MathGlyphVariantRecord] if con else [gname]
+
+for cp in [0x28, 0x29, 0x5B, 0x5D, 0x7B, 0x7D, 0x7C]:
+    g0 = fira_cmap.get(cp)
+    if not g0:
+        continue
+    for g in vert_variants(g0):
+        if graft_symbol(g, cp, stroke_cap=True):     # constant stroke, stretch to height
+            sym_done += 1
+
+# ============================================================================
+# synthesised symbols (Comic Relief lacks them) — drawn in the target glyph's
+# box, unioned via pathops. Stroke held at a comic weight.
+# ============================================================================
+SW = 86   # synthesised-symbol stroke weight
+
+def box_of(gname):
+    ob = BoundsPen(fira_gs); fira_gs[gname].draw(ob)
+    return ob.bounds
+
+def _poly(pts, sw, caps=True):
+    cs = [_seg(*pts[i], *pts[i+1], sw) for i in range(len(pts)-1) if pts[i] != pts[i+1]]
+    idx = range(len(pts)) if caps else range(1, len(pts)-1)
+    cs += [_disc(*pts[i], sw/2) for i in idx]
+    return cs
+
+def synth(gname, contours):
+    if gname not in charstrs or not box_of(gname):
+        return False
+    return emit_pathops(gname, lambda pen: _emit(pen, contours))
+
+def flip_glyph(target, src_name, vflip=False, hflip=False):
+    if target not in charstrs or src_name not in charstrs:
+        return False
+    rec = RecordingPen(); charstrs[src_name].draw(rec)
+    sb = BoundsPen({}); rec.replay(sb)
+    tb = box_of(target)
+    if not sb.bounds or not tb:
+        return False
+    sx0, sy0, sx1, sy1 = sb.bounds
+    tx0, ty0, tx1, ty1 = tb
+    s = (ty1 - ty0) / (sy1 - sy0)
+    ax = -s if hflip else s
+    ay = -s if vflip else s
+    dx = (tx0 + tx1)/2 - ax*(sx0 + sx1)/2
+    dy = (ty0 + ty1)/2 - ay*(sy0 + sy1)/2
+    return emit_pathops(target, lambda pen:
+                        rec.replay(TransformPen(pen, (ax, 0, 0, ay, dx, dy))))
+
+def cmap_g(cp):
+    return fira_cmap.get(cp)
+
+extra = 0
+
+# --- group 2: flips/mirrors of existing comic glyphs -------------------------
+flips = [(0x2207, 0x394, True, False),   # ∇ = Δ flipped vertically
+         (0x2200, 0x41,  True, False),   # ∀ = A flipped vertically
+         (0x2203, 0x45,  False, True)]   # ∃ = E mirrored horizontally
+for tcp, scp, vf, hf in flips:
+    tg, sg = cmap_g(tcp), cmap_g(scp)
+    if tg and sg and flip_glyph(tg, sg, vflip=vf, hflip=hf):
+        extra += 1
+for tg, sg in [("uni2210", "uni220F"), ("uni2210.display", "uni220F.display")]:  # ∐ = ∏ flipped
+    if sg in charstrs and flip_glyph(tg, sg, vflip=True):
+        extra += 1
+
+# --- group 3: circled operators ---------------------------------------------
+def circled(gname, inner):
+    b = box_of(gname)
+    if not b:
+        return False
+    x0, y0, x1, y1 = b
+    cx, cy = (x0+x1)/2, (y0+y1)/2
+    R = min(x1-x0, y1-y0)/2 - SW*0.55
+    th = SW*0.82
+    cs = _ring(cx, cy, R, th)
+    cs += inner(cx, cy, R)
+    return synth(gname, cs)
+
+def _plus(cx, cy, R):  r = R*0.62; return _poly([(cx-r,cy),(cx+r,cy)],SW)+_poly([(cx,cy-r),(cx,cy+r)],SW)
+def _times(cx, cy, R): r = R*0.52; return _poly([(cx-r,cy-r),(cx+r,cy+r)],SW)+_poly([(cx-r,cy+r),(cx+r,cy-r)],SW)
+def _dotc(cx, cy, R):  return [_disc(cx,cy,SW*0.7)]
+def _minus(cx, cy, R): r = R*0.62; return _poly([(cx-r,cy),(cx+r,cy)],SW)
+def _slash(cx, cy, R): r = R*0.95; return _poly([(cx-r,cy-r),(cx+r,cy+r)],SW)
+
+for cp, inner in [(0x2295,_plus),(0x2297,_times),(0x2299,_dotc),(0x2296,_minus),
+                  (0x2298,_slash),(0x2205,_slash)]:   # ⊕ ⊗ ⊙ ⊖ ⊘ ∅
+    g = cmap_g(cp)
+    if g and circled(g, inner):
+        extra += 1
+
+# --- group 4a: arrows -------------------------------------------------------
+def arrow_h(b, head_l, head_r, double=False, barl=False):
+    x0, y0, x1, y1 = b
+    cy = (y0+y1)/2
+    x0 += SW/2; x1 -= SW/2
+    hl = min((x1-x0)*0.34, (y1-y0)*0.42); sp = hl*0.62
+    cs = []
+    if double:
+        g = SW*0.85
+        cs += _poly([(x0,cy+g),(x1-hl*0.5,cy+g)],SW) + _poly([(x0,cy-g),(x1-hl*0.5,cy-g)],SW)
+    else:
+        cs += _poly([(x0,cy),(x1,cy)],SW)
+    if head_r: cs += _poly([(x1-hl,cy+sp),(x1,cy),(x1-hl,cy-sp)],SW)
+    if head_l: cs += _poly([(x0+hl,cy+sp),(x0,cy),(x0+hl,cy-sp)],SW)
+    if barl:   cs += _poly([(x0,cy-(y1-y0)*0.28),(x0,cy+(y1-y0)*0.28)],SW)
+    return cs
+
+def arrow_v(b, head_u, head_d):
+    x0, y0, x1, y1 = b
+    cx = (x0+x1)/2
+    y0 += SW/2; y1 -= SW/2
+    hl = min((y1-y0)*0.34, (x1-x0)*0.7); sp = hl*0.62
+    cs = _poly([(cx,y0),(cx,y1)],SW)
+    if head_u: cs += _poly([(cx-sp,y1-hl),(cx,y1),(cx+sp,y1-hl)],SW)
+    if head_d: cs += _poly([(cx-sp,y0+hl),(cx,y0),(cx+sp,y0+hl)],SW)
+    return cs
+
+arrows = [(0x2192,arrow_h,dict(head_l=False,head_r=True)),
+          (0x2190,arrow_h,dict(head_l=True,head_r=False)),
+          (0x2194,arrow_h,dict(head_l=True,head_r=True)),
+          (0x21D2,arrow_h,dict(head_l=False,head_r=True,double=True)),
+          (0x21D0,arrow_h,dict(head_l=True,head_r=False,double=True)),
+          (0x21D4,arrow_h,dict(head_l=True,head_r=True,double=True)),
+          (0x21A6,arrow_h,dict(head_l=False,head_r=True,barl=True)),
+          (0x27F6,arrow_h,dict(head_l=False,head_r=True)),
+          (0x2191,arrow_v,dict(head_u=True,head_d=False)),
+          (0x2193,arrow_v,dict(head_u=False,head_d=True)),
+          (0x2195,arrow_v,dict(head_u=True,head_d=True))]
+for cp, fn, kw in arrows:
+    g = cmap_g(cp); b = box_of(g) if g else None
+    if b and synth(g, fn(b, **kw)):
+        extra += 1
+
+# --- group 4b: set/logic shapes ---------------------------------------------
+def _wave(x0, x1, y, amp, n=24):
+    return [(x0 + (x1-x0)*i/n, y + amp*math.sin(2*math.pi*i/n)) for i in range(n+1)]
+
+def shape(gname, fn):
+    b = box_of(gname)
+    return synth(gname, fn(b)) if b else False
+
+def s_cup(b):
+    x0,y0,x1,y1=b; r=SW/2; xl,xr=x0+r,x1-r; cxm=(xl+xr)/2; h=y1-y0
+    return _poly(_catmull([(xl,y1),(xl,y0+0.28*h),(cxm,y0+r),(xr,y0+0.28*h),(xr,y1)],8),SW)
+def s_cap(b):
+    x0,y0,x1,y1=b; r=SW/2; xl,xr=x0+r,x1-r; cxm=(xl+xr)/2; h=y1-y0
+    return _poly(_catmull([(xl,y0),(xl,y1-0.28*h),(cxm,y1-r),(xr,y1-0.28*h),(xr,y0)],8),SW)
+def s_vee(b):  x0,y0,x1,y1=b; r=SW/2; return _poly([(x0+r,y1),((x0+x1)/2,y0+r),(x1-r,y1)],SW)
+def s_wedge(b):x0,y0,x1,y1=b; r=SW/2; return _poly([(x0+r,y0),((x0+x1)/2,y1-r),(x1-r,y0)],SW)
+def s_subset(b, eq=False):
+    x0,y0,x1,y1=b; r=SW/2; w=x1-x0
+    yb=y0+r+(SW*1.7 if eq else 0); yt=y1-r; cy=(yb+yt)/2
+    cs=_poly(_catmull([(x1-r,yt),(x0+w*0.32,yt),(x0+r,cy),(x0+w*0.32,yb),(x1-r,yb)],8),SW)
+    if eq: cs+=_poly([(x0+r,y0+r),(x1-r,y0+r)],SW)
+    return cs
+def s_supset(b, eq=False):
+    x0,y0,x1,y1=b; r=SW/2; w=x1-x0
+    yb=y0+r+(SW*1.7 if eq else 0); yt=y1-r; cy=(yb+yt)/2
+    cs=_poly(_catmull([(x0+r,yt),(x1-w*0.32,yt),(x1-r,cy),(x1-w*0.32,yb),(x0+r,yb)],8),SW)
+    if eq: cs+=_poly([(x0+r,y0+r),(x1-r,y0+r)],SW)
+    return cs
+
+setshapes = [(0x222A,s_cup),(0x2229,s_cap),(0x2228,s_vee),(0x2227,s_wedge),
+             (0x2282,lambda b:s_subset(b)),(0x2283,lambda b:s_supset(b)),
+             (0x2286,lambda b:s_subset(b,eq=True)),(0x2287,lambda b:s_supset(b,eq=True))]
+for cp, fn in setshapes:
+    g = cmap_g(cp)
+    if g and shape(g, fn):
+        extra += 1
+
+# --- group 4c: tilde/equiv relations ----------------------------------------
+def r_sim(b):   x0,y0,x1,y1=b; cy=(y0+y1)/2; return _poly(_wave(x0+SW/2,x1-SW/2,cy,(y1-y0)*0.16),SW)
+def r_equiv(b): x0,y0,x1,y1=b; r=SW/2; g=(y1-y0-SW)/2; cy=(y0+y1)/2; \
+    return sum((_poly([(x0+r,cy+dy),(x1-r,cy+dy)],SW) for dy in (-g,0,g)),[])
+def r_cong(b):  x0,y0,x1,y1=b; r=SW/2; \
+    return _poly(_wave(x0+r,x1-r,y0+(y1-y0)*0.68,(y1-y0)*0.12),SW)+_poly([(x0+r,y0+(y1-y0)*0.28),(x1-r,y0+(y1-y0)*0.28)],SW)
+def r_simeq(b): return r_cong(b)
+def r_propto(b):x0,y0,x1,y1=b; r=SW/2; cy=(y0+y1)/2; \
+    return _poly([(x0+r,cy),(x0+(x1-x0)*0.45,y1-r),(x0+(x1-x0)*0.45,y0+r),(x0+r,cy)],SW)+_poly([(x0+(x1-x0)*0.45,cy),(x1-r,cy)],SW)
+
+for cp, fn in [(0x223C,r_sim),(0x2261,r_equiv),(0x2245,r_cong),(0x2243,r_simeq)]:
+    g = cmap_g(cp)
+    if g and shape(g, fn):
+        extra += 1
+
+# --- group 4d: dots / cdot / circ / ast -------------------------------------
+def d_cdot(b):  x0,y0,x1,y1=b; return [_disc((x0+x1)/2,(y0+y1)/2,SW*0.62)]
+def d_cdots(b): x0,y0,x1,y1=b; cy=(y0+y1)/2; xs=[x0+(x1-x0)*t for t in (0.2,0.5,0.8)]; return [_disc(x,cy,SW*0.55) for x in xs]
+def d_vdots(b): x0,y0,x1,y1=b; cx=(x0+x1)/2; ys=[y0+(y1-y0)*t for t in (0.2,0.5,0.8)]; return [_disc(cx,y,SW*0.55) for y in ys]
+def d_ddots(b): x0,y0,x1,y1=b; ts=(0.2,0.5,0.8); return [_disc(x0+(x1-x0)*t,y0+(y1-y0)*(1-t),SW*0.55) for t in ts]
+def d_circ(b):  x0,y0,x1,y1=b; return _ring((x0+x1)/2,(y0+y1)/2, min(x1-x0,y1-y0)/2-SW*0.35, SW*0.62, n=28)
+def d_ast(b):
+    x0,y0,x1,y1=b; cx,cy=(x0+x1)/2,(y0+y1)/2; r=min(x1-x0,y1-y0)*0.42; cs=[]
+    for k in range(3):
+        a=math.pi/2+k*math.pi/3
+        cs+=_poly([(cx-r*math.cos(a),cy-r*math.sin(a)),(cx+r*math.cos(a),cy+r*math.sin(a))],SW*0.8)
+    return cs
+
+for cp, fn in [(0x22C5,d_cdot),(0x22EF,d_cdots),(0x22EE,d_vdots),(0x22F1,d_ddots),
+               (0x2218,d_circ),(0x2217,d_ast)]:
+    g = cmap_g(cp)
+    if g and shape(g, fn):
+        extra += 1
+
+# --- group 4e: stretchy delimiters (base + size variants) -------------------
+def d_lfloor(b): x0,y0,x1,y1=b; r=SW/2; return _poly([(x0+r,y1),(x0+r,y0+r),(x1-r,y0+r)],SW)
+def d_rfloor(b): x0,y0,x1,y1=b; r=SW/2; return _poly([(x1-r,y1),(x1-r,y0+r),(x0+r,y0+r)],SW)
+def d_lceil(b):  x0,y0,x1,y1=b; r=SW/2; return _poly([(x0+r,y0),(x0+r,y1-r),(x1-r,y1-r)],SW)
+def d_rceil(b):  x0,y0,x1,y1=b; r=SW/2; return _poly([(x1-r,y0),(x1-r,y1-r),(x0+r,y1-r)],SW)
+def d_langle(b): x0,y0,x1,y1=b; r=SW/2; return _poly([(x1-r,y1-r),(x0+r,(y0+y1)/2),(x1-r,y0+r)],SW)
+def d_rangle(b): x0,y0,x1,y1=b; r=SW/2; return _poly([(x0+r,y1-r),(x1-r,(y0+y1)/2),(x0+r,y0+r)],SW)
+def d_vert2(b):  x0,y0,x1,y1=b; cx=(x0+x1)/2; g=SW*0.9; return _poly([(cx-g,y0),(cx-g,y1)],SW)+_poly([(cx+g,y0),(cx+g,y1)],SW)
+
+for cp, fn in [(0x230A,d_lfloor),(0x230B,d_rfloor),(0x2308,d_lceil),(0x2309,d_rceil),
+               (0x27E8,d_langle),(0x27E9,d_rangle),(0x2016,d_vert2)]:
+    g0 = cmap_g(cp)
+    if not g0:
+        continue
+    for g in vert_variants(g0):
+        b = box_of(g)
+        if b and synth(g, fn(b)):
+            extra += 1
+
+# --- blackboard bold numbers ℕ ℤ ℚ ℝ ℂ ℙ ℍ (hand-drawn double-struck) --------
+BBW, BBG = 44, 84   # blackboard stroke + doubling gap
+def _off(p, q, d):
+    dx, dy = q[0]-p[0], q[1]-p[1]; L = math.hypot(dx, dy) or 1
+    nx, ny = -dy/L*d, dx/L*d
+    return [(p[0]+nx, p[1]+ny), (q[0]+nx, q[1]+ny)]
+def _dl(p, q, sw, d):  return _poly([p, q], sw) + _poly(_off(p, q, d), sw)
+def _dv(x, y0, y1, sw, g): return _poly([(x,y0),(x,y1)], sw) + _poly([(x+g,y0),(x+g,y1)], sw)
+
+def bb_N(b):
+    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r
+    return _dv(xl,y0,y1,BBW,BBG)+_poly([(xl+BBG,y1),(xr,y0)],BBW)+_poly([(xr,y0),(xr,y1)],BBW)
+def bb_H(b):
+    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r; cy=(y0+y1)/2
+    return _dv(xl,y0,y1,BBW,BBG)+_poly([(xr,y0),(xr,y1)],BBW)+_poly([(xl,cy),(xr,cy)],BBW)
+def bb_Z(b):
+    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r
+    return _poly([(xl,y1),(xr,y1)],BBW)+_poly([(xl,y0),(xr,y0)],BBW)+_dl((xr,y1),(xl,y0),BBW,BBG)
+def bb_P(b):
+    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r; cy=(y0+y1)/2
+    bowl=_catmull([(xl+BBG,y1),(xr,y1),(xr,(y1+cy)/2),(xl+BBG,cy)],8)
+    return _dv(xl,y0,y1,BBW,BBG)+_poly(bowl,BBW)
+def bb_R(b):
+    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r; m=y0+(y1-y0)*0.5
+    bowl=_catmull([(xl+BBG,y1),(xr,y1),(xr,(y1+m)/2),(xl+BBG,m)],8)
+    leg=_poly([(xl+BBG+(xr-xl)*0.15,m),(xr,y0)],BBW)
+    return _dv(xl,y0,y1,BBW,BBG)+_poly(bowl,BBW)+leg
+def bb_C(b):
+    x0,y0,x1,y1=b; r=BBW/2; xl,xr=x0+r,x1-r; cy=(y0+y1)/2; h=y1-y0
+    arc=_catmull([(xr,y1-r),((xl+xr)/2,y1-r),(xl,cy),((xl+xr)/2,y0+r),(xr,y0+r)],10)
+    return _poly(arc,BBW)+_poly([(xl+BBG,cy-h*0.27),(xl+BBG,cy+h*0.27)],BBW)
+def bb_Q(b):
+    x0,y0,x1,y1=b; cx,cy=(x0+x1)/2,(y0+y1)/2; R=min(x1-x0,y1-y0)/2-BBW/2
+    ring=_ring(cx,cy,R,BBW,n=36)
+    bar=_poly([(cx-R+BBG,cy-R*0.45),(cx-R+BBG,cy+R*0.45)],BBW)
+    tail=_poly([(cx+R*0.30,y0+(y1-y0)*0.30),(cx+R*0.95,y0)],BBW)
+    return ring+bar+tail
+
+for cp, fn in [(0x2115,bb_N),(0x2124,bb_Z),(0x211A,bb_Q),(0x211D,bb_R),
+               (0x2102,bb_C),(0x2119,bb_P),(0x210D,bb_H)]:
+    g = cmap_g(cp)
+    if g and shape(g, fn):
+        extra += 1
+
+# --- calligraphic alphabet (new glyphs from Pacifico, casual script) ---------
+_orig_order = list(fira.getGlyphOrder())
+_new_names = []
+def add_glyph(name, ch, width):
+    charstrs.charStrings[name] = len(charstrs.charStringsIndex)
+    charstrs.charStringsIndex.append(ch)
+    top.charset.append(name)
+    hmtx.metrics[name] = (int(round(width)), 0)
+    _new_names.append(name)
+def add_cmap(cp, name):
+    for t in fira["cmap"].tables:
+        if cp <= 0xFFFF or t.format >= 12:
+            t.cmap[cp] = name
+
+SCRIPT_UP = {'A':0x1D49C,'B':0x212C,'C':0x1D49E,'D':0x1D49F,'E':0x2130,'F':0x2131,
+             'G':0x1D4A2,'H':0x210B,'I':0x2110,'J':0x1D4A5,'K':0x1D4A6,'L':0x2112,
+             'M':0x2133,'N':0x1D4A9,'O':0x1D4AA,'P':0x1D4AB,'Q':0x1D4AC,'R':0x211B,
+             'S':0x1D4AE,'T':0x1D4AF,'U':0x1D4B0,'V':0x1D4B1,'W':0x1D4B2,'X':0x1D4B3,
+             'Y':0x1D4B4,'Z':0x1D4B5}
+S_CAL = F_CAP / PAC_CAP
+for ch, cp in SCRIPT_UP.items():
+    src = pac_cmap.get(ord(ch))
+    if src is None:
+        continue
+    rec = DecomposingRecordingPen(pac_gs); pac_gs[src].draw(rec)
+    adv = pac["hmtx"][src][0] * S_CAL
+    t2 = T2CharStringPen(adv, None)
+    rec.replay(TransformPen(Qu2CuPen(t2, max_err=0.6, reverse_direction=True),
+                            (S_CAL, 0, 0, S_CAL, 0, 0)))
+    name = "cm_cal_%04X" % cp
+    add_glyph(name, t2.getCharString(private=private, globalSubrs=gsubrs), adv)
+    add_cmap(cp, name)
+    extra += 1
+
+fira.setGlyphOrder(_orig_order + _new_names)            # set order ONCE (all new glyphs)
+fira["maxp"].numGlyphs = len(_orig_order) + len(_new_names)
+
+print(f"synthesised {extra} extra TeX symbols (incl. blackboard + calligraphic)")
+
+# harmonise engine-drawn rules with the (thinner) comic stroke weight
+mc = fira["MATH"].table.MathConstants
+for fld, val in [("FractionRuleThickness", 88), ("RadicalRuleThickness", RAD_W),
+                 ("OverbarRuleThickness", 85), ("UnderbarRuleThickness", 85)]:
+    rec = getattr(mc, fld)
+    if rec is not None:
+        rec.Value = val
+print(f"grafted {sym_done} symbol glyphs from Comic Relief; tuned rule thicknesses")
+
+name = fira["name"]
+def setname(nameID, value):
+    name.setName(value, nameID, 3, 1, 0x409)
+    name.setName(value, nameID, 1, 0, 0)
+ps = FAMILY.replace(" ", "")
+setname(1, FAMILY); setname(4, f"{FAMILY} Regular")
+setname(6, f"{ps}-Regular"); setname(16, FAMILY); setname(17, "Regular")
+
+fira.save(OUT)
+print(f"grafted {done} glyphs, skipped {skip}, wobble={WOBBLE} -> {OUT}")
