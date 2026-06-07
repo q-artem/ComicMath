@@ -178,6 +178,29 @@ for tgt, src_cp, src_cmap, src_gs, s, skew in jobs:
     charstrs[gname] = t2.getCharString(private=private)
     done += 1
 
+# --- thin the (chunky) digits so subscripts/indices don't look bold ----------
+DIGIT_ERODE = 13
+def erode_glyph(gname, d):
+    if gname not in charstrs:
+        return
+    src = pathops.Path(); charstrs[gname].draw(src.getPen())
+    rib = pathops.Path(); charstrs[gname].draw(rib.getPen())
+    rib.stroke(2*d, pathops.LineCap.ROUND_CAP, pathops.LineJoin.ROUND_JOIN, 4)
+    rib.convertConicsToQuads(0.5)
+    try:
+        res = pathops.op(src, rib, pathops.PathOp.DIFFERENCE, fix_winding=True)
+    except pathops.PathOpsError:
+        return
+    res.convertConicsToQuads(0.5)
+    w = hmtx[gname][0]
+    t2 = T2CharStringPen(w, None); res.draw(Qu2CuPen(t2, max_err=0.6))
+    charstrs[gname] = t2.getCharString(private=private, globalSubrs=gsubrs)
+if DIGIT_ERODE:
+    for cp in range(0x30, 0x3A):                 # plain digits 0-9
+        g = fira_cmap.get(cp)
+        if g:
+            erode_glyph(g, DIGIT_ERODE)
+
 # --- Symbols (operators, relations, big operators) from Comic Relief ----------
 CR_STROKE   = 75.2 * gk["head"].unitsPerEm / 1000   # donor stroke in donor units (~154)
 STROKE_MAX  = 96                                     # target symbol stroke (20% thinner)
