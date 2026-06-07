@@ -780,7 +780,13 @@ def load_svg_glyph(svgpath, sb=40):
                        pathops.LineCap.ROUND_CAP, pathops.LineJoin.ROUND_JOIN, 4)
             sub.convertConicsToQuads(0.5)
         acc.addPath(sub)
-    acc = pathops.simplify(acc, fix_winding=True)
+    try:
+        acc = pathops.simplify(acc, fix_winding=True)
+    except pathops.PathOpsError:
+        try:
+            acc = pathops.simplify(acc)          # retry w/o fix_winding
+        except pathops.PathOpsError:
+            acc.fillType = pathops.FillType.WINDING   # raw union, nonzero fill
     acc.convertConicsToQuads(0.5)
     if not acc.bounds:
         return None

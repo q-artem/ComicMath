@@ -69,27 +69,27 @@ for el in root.iter(NS+'path'):
     strokes.append({'cx':(x0+x1)/2,'cy':(y0+y1)/2,'rec':rec,'M':M,'b':bp.bounds})
 print(f"{len(strokes)} ink strokes")
 
-medh = sorted(s['b'][3]-s['b'][1] for s in strokes)[len(strokes)//2]
-# rows by y gap
+# rows: split sorted-by-cy where the gap is an outlier (inter-row gap >> dab gaps)
 strokes.sort(key=lambda s: s['cy'])
+cyg = [strokes[i+1]['cy']-strokes[i]['cy'] for i in range(len(strokes)-1)]
+medy = sorted(cyg)[len(cyg)//2] or 1
 rows = [[strokes[0]]]
-for s in strokes[1:]:
-    if s['cy'] - rows[-1][-1]['cy'] > 0.7*medh:
-        rows.append([s])
-    else:
-        rows[-1].append(s)
-# letters within each row by x gap
-letters = []
+for s, g in zip(strokes[1:], cyg):
+    (rows.append([s]) if g > max(8*medy, 50) else rows[-1].append(s))
+# letters within a row: split by WHITESPACE gap (> fraction of the row's letter height)
+letters = []; per_row = []
 for row in rows:
     row.sort(key=lambda s: s['cx'])
-    cur = [row[0]]
+    row_h = max(s['b'][3] for s in row) - min(s['b'][1] for s in row)
+    cur = [row[0]]; right = row[0]['b'][2]; n0 = len(letters)
     for s in row[1:]:
-        if s['cx'] - max(c['b'][2] for c in cur) > 0.35*medh:
+        if s['b'][0] - right > 0.16*row_h:
             letters.append(cur); cur = [s]
         else:
             cur.append(s)
-    letters.append(cur)
-print(f"{len(rows)} rows, {len(letters)} letters; expected {len(LETTERS)}")
+        right = max(right, s['b'][2])
+    letters.append(cur); per_row.append(len(letters) - n0)
+print(f"{len(rows)} rows, {len(letters)} letters; expected {len(LETTERS)}; per row {per_row}")
 if len(letters) != len(LETTERS):
     print("WARNING: letter count mismatch — check spacing/order")
 
@@ -100,10 +100,29 @@ for grp, ch in zip(letters, LETTERS):
     sc = CAPH / (gy1 - gy0)
     # page -> template: tx = sc*x + (LSB - sc*gx0); ty = sc*y + (BASELINE - sc*gy1)
     tmpl = (sc, 0, 0, sc, LSB - sc*gx0, BASELINE - sc*gy1)
-    pp = pathops.Path()
+    # each pen-stroke becomes its own closed path, unioned robustly via OpBuilder
+    subs = []
     for s in grp:
-        s['rec'].replay(TransformPen(TransformPen(pp.getPen(), tmpl), s['M']))
-    pp = pathops.simplify(pp, fix_winding=True)
+        sp_ = pathops.Path()
+        s['rec'].replay(TransformPen(TransformPen(sp_.getPen(), tmpl), s['M']))
+        try:
+            sp_ = pathops.simplify(sp_, fix_winding=True)   # clean each stroke first
+        except pathops.PathOpsError:
+            pass
+        subs.append(sp_)
+    try:
+        b = pathops.OpBuilder(fix_winding=True, keep_starting_points=False)
+        for sp_ in subs:
+            b.add(sp_, pathops.PathOp.UNION)
+        pp = b.resolve()
+    except pathops.PathOpsError:
+        pp = pathops.Path()
+        for sp_ in subs:
+            pp.addPath(sp_)
+        try:
+            pp = pathops.simplify(pp, fix_winding=True)
+        except pathops.PathOpsError:
+            print(f"  (union failed for {ch}; raw)")
     sp = SVGPathPen(None); pp.draw(sp)
     w = int(sc*(gx1-gx0) + 2*LSB)
     out = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} 1000">\n'
