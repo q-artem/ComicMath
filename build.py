@@ -48,6 +48,11 @@ private  = top.Private
 gsubrs   = cff.GlobalSubrs
 hmtx     = fira["hmtx"]
 
+# Snapshot original charstring identities. Any glyph we never reassign keeps its
+# object identity, so the final corner-rounding pass can target exactly the
+# untouched raw-Fira symbols (the long tail) and skip everything we restyled.
+_ORIG_IDS = {g: id(charstrs[g]) for g in charstrs.keys()}
+
 F_X, F_CAP = fira["OS/2"].sxHeight, fira["OS/2"].sCapHeight
 S_LOW = F_X   / ci["OS/2"].sxHeight        # Comic Neue lowercase -> Fira x-height
 S_CAP = F_CAP / ci["OS/2"].sCapHeight      # Comic Neue uppercase/digits -> cap-height
@@ -1182,6 +1187,156 @@ for fld, val in [("RadicalKernBeforeDegree", 220), ("RadicalKernAfterDegree", -2
         else:
             setattr(mc, fld, val)
 print(f"grafted {sym_done} symbol glyphs from Comic Relief; tuned rule thicknesses")
+
+# --- Universal pass: round sharp corners + lightly embolden every glyph we left
+#     untouched (the raw-Fira long tail of rare symbols), so they stop looking
+#     like a different font sitting in a comic document. Comic-native drawn /
+#     grafted glyphs are skipped (their charstring identity changed). Geometry:
+#     at each on-curve corner we trim both adjacent sides and bridge them with a
+#     fillet cubic; smooth joins (small turn angle) are left alone.
+ROUND_R    = 140.0     # target fillet radius (em/1000)
+ROUND_ANG  = 30.0      # minimum corner turn angle (deg) to round
+ROUND_FRAC = 0.5       # max fraction of a segment chord eaten from one end
+ROUND_K    = 0.5       # fillet handle pull toward the original vertex
+SYM_EMB    = 4         # light embolden (digits use 6 ≈ +15%)
+
+def _rsub(a, b): return (a[0]-b[0], a[1]-b[1])
+def _radd(a, b): return (a[0]+b[0], a[1]+b[1])
+def _rmul(a, s): return (a[0]*s, a[1]*s)
+def _rlen(a): return math.hypot(a[0], a[1])
+def _runit(a):
+    l = _rlen(a); return (a[0]/l, a[1]/l) if l else (0.0, 0.0)
+
+def _rcub_sub(P, t0, t1):
+    """control points of the cubic portion between params t0 and t1."""
+    def right(P, t):
+        p0, p1, p2, p3 = P
+        a = _radd(p0, _rmul(_rsub(p1, p0), t)); b = _radd(p1, _rmul(_rsub(p2, p1), t))
+        c = _radd(p2, _rmul(_rsub(p3, p2), t)); d = _radd(a, _rmul(_rsub(b, a), t))
+        e = _radd(b, _rmul(_rsub(c, b), t));    f = _radd(d, _rmul(_rsub(e, d), t))
+        return (f, e, c, p3)
+    def left(P, t):
+        p0, p1, p2, p3 = P
+        a = _radd(p0, _rmul(_rsub(p1, p0), t)); b = _radd(p1, _rmul(_rsub(p2, p1), t))
+        c = _radd(p2, _rmul(_rsub(p3, p2), t)); d = _radd(a, _rmul(_rsub(b, a), t))
+        e = _radd(b, _rmul(_rsub(c, b), t));    f = _radd(d, _rmul(_rsub(e, d), t))
+        return (p0, a, d, f)
+    return left(right(P, t0), (t1-t0)/(1-t0) if t0 < 1 else 0.0)
+
+def _rparse(rec):
+    """RecordingPen value -> list of closed contours of segs.
+    seg = ('L', p0, p1) or ('C', p0, c1, c2, p1)."""
+    contours = []; cur = None; start = None; pt = None
+    for op, args in rec.value:
+        if op == "moveTo":
+            if cur is not None: contours.append(cur)
+            start = args[0]; pt = start; cur = []
+        elif op == "lineTo":
+            cur.append(('L', pt, args[0])); pt = args[0]
+        elif op == "curveTo":
+            c1, c2, p1 = args; cur.append(('C', pt, c1, c2, p1)); pt = p1
+        elif op == "qCurveTo":
+            cur.append(('L', pt, args[-1])); pt = args[-1]
+        elif op in ("closePath", "endPath"):
+            if cur:
+                if _rlen(_rsub(pt, start)) > 1e-3: cur.append(('L', pt, start))
+                contours.append(cur); cur = None
+    if cur: contours.append(cur)
+    return contours
+
+def _rtan_in(seg):    # tangent arriving at the seg end node
+    if seg[0] == 'L': return _rsub(seg[2], seg[1])
+    d = _rsub(seg[-1], seg[-2]);  return d if _rlen(d) > 1e-6 else _rsub(seg[-1], seg[1])
+def _rtan_out(seg):   # tangent leaving the seg start node
+    if seg[0] == 'L': return _rsub(seg[2], seg[1])
+    d = _rsub(seg[2], seg[1]);    return d if _rlen(d) > 1e-6 else _rsub(seg[4], seg[1])
+def _rseglen(seg):
+    return _rlen(_rsub(seg[2], seg[1])) if seg[0] == 'L' else _rlen(_rsub(seg[-1], seg[1]))
+
+def _rround_contour(segs):
+    m = len(segs)
+    if m < 2: return None
+    node = [s[1] for s in segs]
+    trim = [0.0]*m; corner = [False]*m
+    for i in range(m):
+        din = _rtan_in(segs[(i-1) % m]); dout = _rtan_out(segs[i])
+        if _rlen(din) < 1e-6 or _rlen(dout) < 1e-6: continue
+        ui, uo = _runit(din), _runit(dout)
+        dot = max(-1.0, min(1.0, ui[0]*uo[0]+ui[1]*uo[1]))
+        if math.degrees(math.acos(dot)) >= ROUND_ANG:
+            corner[i] = True
+            trim[i] = min(ROUND_R, ROUND_FRAC*_rseglen(segs[(i-1) % m]),
+                                   ROUND_FRAC*_rseglen(segs[i]))
+    if not any(corner): return None
+    for i in range(m):                                 # keep both trims inside the seg
+        L = _rseglen(segs[i]); a = trim[i]; b = trim[(i+1) % m]
+        if a+b > L and a+b > 0:
+            sc = L/(a+b); trim[i] = a*sc; trim[(i+1) % m] = b*sc
+    def trim_seg(seg, ta, tb):
+        if seg[0] == 'L':
+            p0, p1 = seg[1], seg[2]; u = _runit(_rsub(p1, p0))
+            s = _radd(p0, _rmul(u, ta)); e = _rsub(p1, _rmul(u, tb))
+            return s, ('l', e), e
+        P = (seg[1], seg[2], seg[3], seg[4]); L = _rseglen(seg)
+        t0 = max(0.0, min(0.49, (ta/L) if L else 0.0))
+        t1 = max(t0+0.01, min(1.0, 1-(tb/L) if L else 1.0))
+        q = _rcub_sub(P, t0, t1)
+        return q[0], ('c', q[1], q[2], q[3]), q[3]
+    starts = []; ends = []; mids = []
+    for i in range(m):
+        ta = trim[i] if corner[i] else 0.0
+        tb = trim[(i+1) % m] if corner[(i+1) % m] else 0.0
+        s, mid, e = trim_seg(segs[i], ta, tb)
+        starts.append(s); ends.append(e); mids.append(mid)
+    out = [('m', starts[0])]
+    for i in range(m):
+        out.append(mids[i])
+        j = (i+1) % m
+        if corner[j]:
+            B = ends[i]; V = node[j]; A = starts[j]
+            out.append(('c', _radd(B, _rmul(_rsub(V, B), ROUND_K)),
+                             _radd(A, _rmul(_rsub(V, A), ROUND_K)), A))
+    return out
+
+def round_glyph(gname):
+    if gname not in charstrs: return False
+    rec = RecordingPen(); charstrs[gname].draw(rec)
+    contours = _rparse(rec)
+    if not contours: return False
+    pen = T2CharStringPen(hmtx[gname][0], None); changed = False
+    for segs in contours:
+        ops = _rround_contour(segs)
+        if ops is None:                                # no corners: replay raw
+            first = True
+            for seg in segs:
+                if first: pen.moveTo(seg[1]); first = False
+                if seg[0] == 'L': pen.lineTo(seg[2])
+                else: pen.curveTo(seg[2], seg[3], seg[4])
+            pen.closePath()
+        else:
+            changed = True
+            for op in ops:
+                if op[0] == 'm': pen.moveTo(op[1])
+                elif op[0] == 'l': pen.lineTo(op[1])
+                else: pen.curveTo(op[1], op[2], op[3])
+            pen.closePath()
+    if changed:
+        charstrs[gname] = pen.getCharString(private=private)
+    return changed
+
+_rounded = 0
+for _g in list(charstrs.keys()):
+    if "." in _g:                                      # variant/assembly pieces: tiling seams
+        continue
+    if id(charstrs[_g]) != _ORIG_IDS.get(_g):          # already restyled by us
+        continue
+    _bp = BoundsPen(None); charstrs[_g].draw(_bp)
+    if not _bp.bounds:                                 # empty (space, etc.)
+        continue
+    reweight_glyph(_g, SYM_EMB)                         # light embolden to match comic weight
+    if round_glyph(_g):
+        _rounded += 1
+print(f"rounded {_rounded} untouched symbols (R={ROUND_R:.0f}, embolden={SYM_EMB})")
 
 name = fira["name"]
 def setname(nameID, value):
