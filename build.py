@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""ComicMath: graft Comic Neue (Latin) + Comic Relief (Greek) letterforms into
-Fira Math.
+"""Comic Math: a Comic Sans-style math font for Typst, built on Fira Math.
 
-Keeps Fira's MATH table, symbols, delimiters and per-glyph advance widths.
-Every replaced glyph is scaled to Fira's x-/cap-height and re-centred on the
-horizontal centre of the original Fira glyph it replaces, so math spacing and
-MATH-table metadata stay valid. Greek is sourced upright from Comic Relief and
-sheared 12 deg for the italic math slots (matching Comic Neue's italic angle).
+Keeps Fira Math's OpenType MATH table, metrics and per-glyph advance widths and
+replaces the outlines. In the default "relief" mode the Latin, Greek, Cyrillic
+and digits come from Comic Relief; operators, relations, the radical, brackets,
+arrows, accents and the prime are drawn procedurally; blackboard letters are
+imported from hand-drawn SVGs (svg/bb/, see import_rnote.py); calligraphic,
+fraktur and bold are grafted from Courgette / UnifrakturCook / Comic Relief
+Bold. Italic math slots are sheared 12 deg (Comic Relief has no italic). The
+"neue" mode instead sources the Latin from Comic Neue.
+
+Usage:  python build.py [wobble] [relief|neue]
+  wobble : outline-distortion strength (0 = clean, the default)
+  donor  : Latin donor, "relief" (default) or "neue"
+Output: fonts/ComicMathRelief.otf (relief) or fonts/ComicMath-Regular.otf (neue).
 """
 import math, sys, random, os
 import xml.etree.ElementTree as ET
@@ -23,9 +30,9 @@ BASE    = "fonts/FiraMath-Regular.otf"
 COMIC_I = "fonts/ComicNeue-Italic.ttf"     # Latin math variables (already slanted)
 COMIC_R = "fonts/ComicNeue-Regular.ttf"    # Latin digits + upright
 GREEK   = "fonts/donor-ComicRelief.ttf"    # Greek (comic style), upright
-# argv[1] = wobble strength (0 = clean). argv[2] = latin donor: "neue" | "relief"
+# argv[1] = wobble strength (0 = clean). argv[2] = latin donor: "relief" | "neue"
 WOBBLE  = float(sys.argv[1]) if len(sys.argv) > 1 else 0.0
-LATIN   = sys.argv[2] if len(sys.argv) > 2 else "neue"
+LATIN   = sys.argv[2] if len(sys.argv) > 2 else "relief"   # default = release variant
 _parts  = ["Comic Math"] + (["Relief"] if LATIN == "relief" else []) + (["Wobble"] if WOBBLE else [])
 FAMILY  = " ".join(_parts)
 OUT     = "fonts/" + FAMILY.replace(" ", "") + ".otf" if len(_parts) > 1 else "fonts/ComicMath-Regular.otf"

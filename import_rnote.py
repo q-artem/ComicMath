@@ -5,7 +5,17 @@ so build.py's blackboard importer picks them up.
 
 Usage: python import_rnote.py "<rnote.svg>" ABCDEFG...   (letters in drawing order,
        reading order = top-to-bottom rows, left-to-right within a row)
-Targets: uppercase A-Z, lowercase a-z, digits 0-9 (named <char>.svg).
+
+Row splitting (env):
+  ROW_COUNTS="13,13"  split each row at its N-1 largest horizontal gaps into
+                      exactly that many letters — robust for double-struck
+                      letters whose internal gaps confuse a plain threshold.
+                      Recommended; matches the A-Z drawing (two rows of 13).
+  SPLIT_FRAC=0.16     fallback threshold (gap > FRAC * row height), used only
+                      when ROW_COUNTS is unset.
+
+Glyphs are written as <char>.svg. This project uses uppercase A-Z; lowercase
+and digits are supported but currently unused.
 """
 import re, sys, os
 import xml.etree.ElementTree as ET

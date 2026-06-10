@@ -1,54 +1,71 @@
-# Comic Math
+# ComicMath
 
 Математический шрифт в стиле Comic Sans для Typst.
 
-Typst для формул требует шрифт с OpenType-таблицей `MATH` — иначе он откатывается
-на New Computer Modern. Готового «комиксового» матшрифта нет, поэтому здесь берётся
-таблица `MATH`, метрики, делимитеры и редкие символы у **Fira Math**, а очертания
+## Зачем
+
+Typst для формул требует шрифт с OpenType-таблицей `MATH`. Готового «комиксового» матшрифта нет, поэтому здесь берётся
+таблица `MATH`, метрики, делимитеры и редкие символы из **Fira Math**, а очертания
 букв, греческого, цифр, операторов и скобок пересаживаются из рукописных/комиксовых
-шрифтов. Часть символов (`= ≠ ≤ ≥`, радикал, скобки, стрелки, акценты, штрих) рисуется
+шрифтов. Часть символов (`= ≠ ≤ ≥`, радикал, скобки, стрелки, акценты, штрих) генерируется
 процедурно в `build.py`.
 
-Готовый шрифт: **`fonts/ComicMathRelief.otf`** (семейство «Comic Math Relief»).
+Готовый шрифт: **[fonts/ComicMathRelief.otf](fonts/ComicMathRelief.otf)** (семейство «Comic Math Relief»).
 
 ## Что внутри
 
 Комиксовые: латиница, греческий, кириллица (для подписей в формулах), цифры,
 `∑ ∏ ∫ ∬ ∭ ∮`, `√`, дроби, отношения (`= ≠ ≤ ≥ ≈ ≡ ∼ …`), стрелки, скобки
-`( ) [ ] { } | ⌊⌋ ⌈⌉ ⟨⟩` и их растягивающиеся варианты, акценты, blackboard
-(`ℕ ℤ ℝ …`, рисованные от руки), каллиграфика (`cal`), фрактура (`frak`),
+`( ) [ ] { } | ⌊⌋ ⌈⌉ ⟨⟩` и их многострочные варианты, акценты, blackboard
+(`ℕ ℤ ℝ …`, рисованные от руки, строчных пока нет), каллиграфика (`cal`), фрактура (`frak`),
 bold и bold-italic.
-
-`≤ ≥` — в российском начертании (нижняя черта параллельна галочке). Дробная черта
-остаётся нативной (её рисует движок Typst, а не шрифт). Очень высокие скобки и
-радикалы за пределами самого крупного размера собираются из кусочков Fira Math.
+Дробная черта остаётся нативной (рисуется движоком Typst).
 
 ## Использование в Typst
 
 ```typ
 #show math.equation: set text(font: "Comic Math Relief")
-#set text(font: ("Comic Relief", "DejaVu Sans"))   // обычный текст: лат + кириллица
+#set text(font: ("Comic Relief", "DejaVu Sans"))
 ```
 
 Собирать с указанием папки шрифтов:
 
 ```sh
-typst compile --font-path fonts doc.typ
+typst compile --font-path release doc.typ
 ```
 
 Готовый помощник для подключения — `comic-setup.typ`.
 
+Для **жирного** текста нужны [ComicMathRelief.otf](fonts/ComicMathRelief.otf), [donor-ComicRelief.ttf](fonts/donor-ComicRelief.ttf) (+ для жирного
+[ComicRelief-Bold-fixed.ttf](fonts/ComicRelief-Bold-fixed.ttf), в оригинальном Comic Relief Bold глиф «ю» был битый).
+
+## Онлайн-редактор ([typst.app](https://typst.app))
+
+Те же три шрифта нужно загрузить в папку fonts. \
+Подключение в документет такое же -- `#set text` /
+`#show`, что выше.
+
+## Превью
+
+- Документ со всеми основными символами: [`font-preview.pdf`](font-preview.pdf)
+- Реальный документ (шпаргалка по ВычМату): [`ComicMath-font-preview.pdf`](ComicMath-font-preview.pdf)
+- Она же на [typst.app](https://typst.app): https://typst.app/project/rp26LSCfYvxanKtZ1eGiCX
+
+![Пример основных символов](font-preview.png)
+
 ## Сборка шрифта
 
-Нужны Python с `fonttools` и `skia-pathops` (см. `.venv`).
+Нужен Python с `fonttools` и `skia-pathops`.
 
 ```sh
 .venv/bin/python build.py 0 relief
 ```
 
-Аргументы: `argv[1]` — сила «дрожания» очертаний (0 = чисто), `argv[2]` — донор
-латиницы: `relief` (Comic Relief, по умолчанию) или `neue` (Comic Neue).
-Результат пишется в `fonts/`.
+Аргументы: 
+- `argv[1]` — сила «дрожания» очертаний (0 = чисто)
+- `argv[2]` — донор латиницы: `relief` (Comic Relief, по умолчанию) или `neue` (Comic Neue)
+
+Результат пишется в `fonts/`
 
 Рукописные blackboard-буквы рисуются в [Rnote](https://rnote.flxzt.net)
 (`sources/letters.rnote`), экспортируются в SVG и нарезаются по одной:
@@ -77,7 +94,7 @@ ROW_COUNTS="13,13" .venv/bin/python import_rnote.py sources/letters.svg "ABCDEFG
 (полный текст: [`OFL.txt`](OFL.txt)). Шрифт является производной работой и
 распространяется тоже под OFL 1.1.
 
-Скрипты (`build.py`, `import_rnote.py`) — **MIT**.
+Скрипты — **MIT**.
 
 Шрифты-источники:
 
