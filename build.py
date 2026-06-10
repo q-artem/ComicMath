@@ -1350,8 +1350,21 @@ def setname(nameID, value):
     name.setName(value, nameID, 3, 1, 0x409)
     name.setName(value, nameID, 1, 0, 0)
 ps = FAMILY.replace(" ", "")
-setname(1, FAMILY); setname(4, f"{FAMILY} Regular")
-setname(6, f"{ps}-Regular"); setname(16, FAMILY); setname(17, "Regular")
+VERSION   = "1.0"                                   # bump per release
+COPYRIGHT = ("Copyright (c) 2026 Pshenichnikov Artem | Claude code. "
+             "Derived from Fira Math (c) 2018-2020 Xiangdong Zeng, plus Comic "
+             "Relief, Courgette and UnifrakturCook. Hand-drawn blackboard "
+             "letters are original. Licensed under the SIL Open Font License 1.1.")
+LICENSE   = ("This Font Software is licensed under the SIL Open Font License, "
+             "Version 1.1. This license is available with a FAQ at "
+             "https://openfontlicense.org")
+setname(0,  COPYRIGHT)                              # copyright (was Fira's)
+setname(1,  FAMILY);            setname(4, f"{FAMILY} Regular")
+setname(3,  f"{VERSION};{ps};{ps}-Regular")         # unique id (was Fira's)
+setname(5,  f"Version {VERSION}")                   # version (was Fira's 0.3.4)
+setname(6,  f"{ps}-Regular");   setname(16, FAMILY); setname(17, "Regular")
+setname(13, LICENSE);           setname(14, "https://openfontlicense.org")
+fira["head"].fontRevision = float(VERSION)
 
 fira.save(OUT)
 print(f"grafted {done} glyphs, skipped {skip}, wobble={WOBBLE} -> {OUT}")
